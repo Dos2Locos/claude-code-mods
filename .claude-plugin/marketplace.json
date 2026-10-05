@@ -9,6 +9,11 @@
       "name": "clean-view",
       "source": "./plugins/clean-view",
       "description": "Oculta las llamadas a herramientas y muestra pasos, progreso y un resumen final."
+    },
+    {
+      "name": "openspec-tracker",
+      "source": "./plugins/openspec-tracker",
+      "description": "Sigue los cambios de OpenSpec: fase, artefactos, tareas y acciones /opsx en un panel."
     }
   ]
 }

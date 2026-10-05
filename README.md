@@ -7,6 +7,7 @@ Marketplace de mods para [Claude Code](https://code.claude.com/docs/en/plugins/m
 ```bash
 claude plugin marketplace add Dos2Locos/claude-code-mods
 claude plugin install clean-view@dos2locos-mods
+claude plugin install openspec-tracker@dos2locos-mods
 ```
 
 En una sesión abierta, ejecuta `/reload-plugins` después de instalar o actualizar.
@@ -26,3 +27,15 @@ Vista limpia mientras Claude trabaja:
 - Se activa y desactiva con `0` (prompt vacío), el botón de la franja o `/clean-view [on|off]`.
 
 Funciona en la terminal y en la pestaña Code de la app de escritorio. Requiere Claude Code v2.1.287 o posterior.
+
+### openspec-tracker
+
+Seguimiento del flujo de [OpenSpec](https://github.com/Fission-AI/OpenSpec) en el proyecto de la sesión:
+
+- `/openspec` abre un panel con los cambios activos: fase (`propuesta → specs → diseño → tareas → implementación → listo para archivar`), barra de tareas y última modificación. Pulsa `1`–`9` para abrir uno.
+- Detalle de un cambio: artefactos (✓ hecho, ○ pendiente), tareas de `tasks.md` por sección y validación con `openspec validate`.
+- Botones `a` Aplicar, `x` Archivar y `e` Revisar: escriben `/opsx:apply <id>` (o equivalente) en el prompt sin enviarlo. `v` Validar y `r` Actualizar se ejecutan al momento.
+- Línea de estado con el cambio en curso, detectado por lo que Claude edita o ejecuta: `◐ OpenSpec 05-update-member-screens-ux · 7/15 · implementación`.
+- Aviso cuando un cambio completa todas sus tareas.
+
+Requiere la CLI `openspec` (v1.x) instalada. Solo se activa en proyectos con carpeta `openspec/`.

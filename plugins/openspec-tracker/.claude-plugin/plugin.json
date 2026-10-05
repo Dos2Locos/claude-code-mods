@@ -1,0 +1,7 @@
+{
+  "name": "openspec-tracker",
+  "version": "0.1.0",
+  "description": "Sigue el flujo de los cambios de OpenSpec: fase, artefactos, tareas y acciones /opsx en un panel.",
+  "author": { "name": "Dos2Locos" },
+  "types": "./types/index.d.ts"
+}
