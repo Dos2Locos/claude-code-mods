@@ -1,0 +1,9 @@
+{
+  "name": "clean-view",
+  "version": "0.1.0",
+  "description": "Vista limpia: oculta las llamadas a herramientas y muestra pasos, progreso y un resumen final.",
+  "author": {
+    "name": "Dos2Locos"
+  },
+  "types": "./types/index.d.ts"
+}

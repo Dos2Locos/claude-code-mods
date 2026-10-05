@@ -1,0 +1,14 @@
+{
+  "name": "dos2locos-mods",
+  "description": "Mods de Claude Code de Dos2Locos",
+  "owner": {
+    "name": "Dos2Locos"
+  },
+  "plugins": [
+    {
+      "name": "clean-view",
+      "source": "./plugins/clean-view",
+      "description": "Oculta las llamadas a herramientas y muestra pasos, progreso y un resumen final."
+    }
+  ]
+}
