@@ -39,6 +39,7 @@ Clean View y Context Bar en un único mod: una caja compacta sobre el prompt, co
 - Sin plan, muestra la acción actual y el número de pasos (no hay porcentaje que calcular).
 - Al terminar, resumen breve: archivos modificados, comandos y errores.
 - Sección de contexto (como context-bar): tokens usados de la ventana, umbral de autocompactado, porcentaje, barra apilada por categoría y leyenda. Se refresca al acabar cada turno y tras `/compact`.
+- Cada sección se pliega a una sola línea con `1` (progreso) y `2` (contexto) en el prompt vacío, o con su botón `▾`/`▸`. Plegadas muestran la tarea actual con mini barra y porcentaje, y el uso de contexto con mini barra apilada y porcentaje. La elección se recuerda entre sesiones.
 - Se activa y desactiva con `0` (prompt vacío), el botón de la caja o `/clean-bar [on|off]`.
 
 Sustituye a clean-view y context-bar: conviene no tenerlos activos a la vez.

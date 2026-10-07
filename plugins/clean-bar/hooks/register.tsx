@@ -1,19 +1,25 @@
 // Clean Bar: Clean View y Context Bar en una sola caja sobre el prompt.
 //   Arriba, el progreso: la tarea en curso, una barra del plan y su porcentaje (sin plan,
 //   solo la actividad). Debajo, la ventana de contexto: barra apilada por categoría y leyenda.
+//   Cada sección se pliega a una línea con `1` y `2` (prompt vacío) o su botón ▾/▸.
 //   Oculta las filas de herramientas. Se alterna con `0` (prompt vacío), el botón o /clean-bar.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Reading, Run, Step, StepStatus } from '../types'
+import type { Compact, Reading, Run, Step, StepStatus } from '../types'
 import { GLYPH, SPLIT, cells, legend, share, toReading, tokens } from './context'
 
 const isOn = atom({ plugin: 'clean-bar', key: 'isOn' } as const, true)
 const run = atom({ plugin: 'clean-bar', key: 'run' } as const, null as Run | null)
 const reading = atom({ plugin: 'clean-bar', key: 'reading' } as const, null as Reading | null)
+const compact = atom({ plugin: 'clean-bar', key: 'compact' } as const, { progress: false, context: false } as Compact)
 
 const STORE_KEY = 'isOn'
+const COMPACT_KEY = 'compact'
 const TOGGLE_HOTKEY = '0'
+const FOLD_HOTKEY: Record<keyof Compact, string> = { progress: '1', context: '2' }
+/** Ancho de las barras en modo compacto. */
+const MINI_BAR = 16
 const MIN_WIDTH = 20
 const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
@@ -148,6 +154,11 @@ async function refreshContext($: EngineInterface) {
   await update($, reading, () => toReading(b))
 }
 
+async function toggleCompact($: EngineInterface, section: keyof Compact) {
+  const value = await update($, compact, c => ({ ...c, [section]: !c[section] }))
+  await $.store.set(COMPACT_KEY, value).catch(() => {})
+}
+
 async function trackPlan($: EngineInterface, tool: string, e: object, ran: { result?: unknown }) {
   if (tool === 'TodoWrite') {
     const todos = (e as { todos?: { content: string; status: string }[] }).todos ?? []
@@ -181,6 +192,10 @@ export const register: Register = on => {
     const r = await next(e)
     const stored = await $.store.get(STORE_KEY).catch(() => undefined)
     if (typeof stored === 'boolean') await update($, isOn, () => stored)
+    const folded = (await $.store.get(COMPACT_KEY).catch(() => undefined)) as Partial<Compact> | undefined
+    if (folded && typeof folded === 'object') {
+      await update($, compact, () => ({ progress: folded.progress === true, context: folded.context === true }))
+    }
     await $.command
       .register({ name: 'clean-bar', description: 'Activa o desactiva Clean Bar (on | off | sin argumento para alternar)', immediate: true })
       .catch(() => {})
@@ -205,6 +220,7 @@ export const register: Register = on => {
   // Cada turno del bucle principal empieza una ejecución nueva.
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
+    const folded = await read($, compact)
     await update($, run, () => emptyRun(now))
     return next(e)
   })
@@ -246,6 +262,7 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       const now = await $.clock.now()
+    const folded = await read($, compact)
       await update($, run, r =>
         r ? { ...r, isWorking: false, durationMs: e.durationMs || now - r.startedAt, isAborted: e.isAborted } : r,
       )
@@ -289,37 +306,92 @@ export const register: Register = on => {
     const r = await read($, run)
     const ctx = await read($, reading)
     const now = await $.clock.now()
+    const folded = await read($, compact)
 
-    // Cabecera de cada sección: rombo, nombre, y a la derecha el dato y su porcentaje.
-    const header = (title: string, info: string, percent: number | undefined, tone: string, extra?: RenderChildren) => (
+    const fold = (section: keyof Compact) => (
+      <Button
+        key={`fold-${section}`}
+        hotkey={FOLD_HOTKEY[section]}
+        plain
+        label={folded[section] ? '▸' : '▾'}
+        onPress={() => toggleCompact($, section)}
+      />
+    )
+
+    // Una fila de sección: rombo, nombre y botones, lo que quepa a la izquierda; a la derecha el dato.
+    const row = (title: string, buttons: RenderChildren, left: RenderChildren, right: RenderChildren) => (
       <Box flexDirection="row" justifyContent="space-between">
-        <Box flexDirection="row">
+        <Box flexDirection="row" flexShrink={1}>
           <Text color={ACCENT}>{'◆ '}</Text>
           <Text bold>{`${title} `}</Text>
-          {extra}
+          {buttons}
+          <Text wrap="truncate-end">{left}</Text>
         </Box>
-        <Text wrap="truncate-start">
-          <Text dimColor>{`${info} `}</Text>
-          {percent !== undefined && <Text bold color="black" backgroundColor={tone}>{` ${percent}% `}</Text>}
-        </Text>
+        <Text wrap="truncate-start">{right}</Text>
       </Box>
+    )
+    const badge = (percent: number, tone: string) => (
+      <Text bold color="black" backgroundColor={tone}>{` ${percent}% `}</Text>
     )
 
     const progressSection = () => {
-      if (!r) return header('clean view', 'esperando una tarea', undefined, ACCENT, toggle)
+      const buttons = (
+        <Box flexDirection="row">
+          {fold('progress')}
+          <Text> </Text>
+          {toggle}
+          <Text> </Text>
+        </Box>
+      )
+      if (!r) return row('clean view', buttons, null, <Text dimColor>esperando una tarea</Text>)
       const hasPlan = r.plan.length > 0
       const { done, total, percent } = progress(r.plan)
       const current = currentTask(r.plan)
       const elapsed = formatDuration(r.isWorking ? now - r.startedAt : r.durationMs)
       const isClean = r.errors === 0 && !r.isAborted
       const tone = r.isWorking ? ACCENT : isClean ? OK : WARN
-      const info = hasPlan
-        ? `tarea ${current && r.isWorking ? current.index + 1 : done} de ${total} · ${elapsed}`
-        : `${r.toolCalls} ${r.toolCalls === 1 ? 'paso' : 'pasos'} · ${elapsed}`
+      const position = current && r.isWorking ? current.index + 1 : done
+      const steps = `${r.toolCalls} ${r.toolCalls === 1 ? 'paso' : 'pasos'}`
+
+      if (folded.progress) {
+        // Una línea: lo que se hace ahora (o el resumen) y, a la derecha, mini barra y porcentaje.
+        const doing = r.isWorking ? (current?.step ?? r.activity) : undefined
+        const left = r.isWorking ? (
+          doing ? (
+            <Text>
+              <Text color={COLOR[doing.status]}>{`${ICON[doing.status]} `}</Text>
+              <Text>{doing.label}</Text>
+            </Text>
+          ) : (
+            <Text dimColor>Pensando…</Text>
+          )
+        ) : (
+          <Text color={tone}>{`${isClean ? '✓' : '!'} ${summarize(r)}`}</Text>
+        )
+        const mini = bar(percent, MINI_BAR)
+        const right = hasPlan ? (
+          <Text>
+            <Text color={tone}>{mini.filled}</Text>
+            <Text color={TRACK}>{mini.empty}</Text>
+            <Text dimColor>{` ${position}/${total} `}</Text>
+            {badge(percent, tone)}
+          </Text>
+        ) : (
+          <Text dimColor>{` ${steps} · ${elapsed}`}</Text>
+        )
+        return row('clean view', buttons, left, right)
+      }
+
+      const info = hasPlan ? `tarea ${position} de ${total} · ${elapsed}` : `${steps} · ${elapsed}`
       const { filled, empty } = bar(percent, inner)
       return (
         <Box flexDirection="column">
-          {header('clean view', info, hasPlan ? percent : undefined, tone, toggle)}
+          {row('clean view', buttons, null, (
+            <Text>
+              <Text dimColor>{`${info} `}</Text>
+              {hasPlan && badge(percent, tone)}
+            </Text>
+          ))}
           {hasPlan && (
             <Text>
               <Text color={tone}>{filled}</Text>
@@ -349,17 +421,43 @@ export const register: Register = on => {
     }
 
     const contextSection = (c: Reading) => {
-      const info = `${tokens(c.total)} de ${tokens(c.window)}${c.compactsAt ? ` · compacta en ${tokens(c.compactsAt)}` : ''}`
+      const used = `${tokens(c.total)} de ${tokens(c.window)}`
       const level = c.compactsAt ? c.total / c.compactsAt : c.total / c.window
       const tone = level >= 0.9 ? 'red' : level >= 0.7 ? 'yellow' : 'green'
-      return (
-        <Box flexDirection="column" marginTop={1}>
-          {header('context', info, c.percent, tone)}
+      const buttons = (
+        <Box flexDirection="row">
+          {fold('context')}
+          <Text> </Text>
+        </Box>
+      )
+      const stacked = (width: number) => (
+        <Text>
+          {cells(c, width).map(cell => (
+            <Text color={cell.color}>{cell.text}</Text>
+          ))}
+        </Text>
+      )
+
+      if (folded.context) {
+        return row('context', buttons, null, (
           <Text>
-            {cells(c, inner).map(cell => (
-              <Text color={cell.color}>{cell.text}</Text>
-            ))}
+            {stacked(MINI_BAR)}
+            <Text dimColor>{` ${used} `}</Text>
+            {badge(c.percent, tone)}
           </Text>
+        ))
+      }
+
+      const info = `${used}${c.compactsAt ? ` · compacta en ${tokens(c.compactsAt)}` : ''}`
+      return (
+        <Box flexDirection="column">
+          {row('context', buttons, null, (
+            <Text>
+              <Text dimColor>{`${info} `}</Text>
+              {badge(c.percent, tone)}
+            </Text>
+          ))}
+          {stacked(inner)}
           {legend(c, inner).map(line => (
             <Text wrap="truncate-end">
               {line.map((sl, i) => (
@@ -377,11 +475,12 @@ export const register: Register = on => {
       )
     }
 
+    // Separación entre secciones solo cuando la de arriba ocupa varias líneas.
     return (
       <Box flexDirection="column">
         <Box flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
           {progressSection()}
-          {ctx && contextSection(ctx)}
+          {ctx && <Box marginTop={folded.progress ? 0 : 1}>{contextSection(ctx)}</Box>}
         </Box>
         {rest}
       </Box>

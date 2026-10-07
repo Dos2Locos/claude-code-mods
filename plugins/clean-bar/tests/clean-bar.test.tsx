@@ -90,6 +90,13 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
 
     const row = await $.ui.mount({ plugin: 'clean-bar', surface, ...TOOL_ROW })
     expect(await row.find({ type: 'Text' })).toBeUndefined()
+    // Plegada, la sección de progreso cabe en una línea: la tarea y el porcentaje, sin la acción
+    await band.press({ key: 'fold-progress' })
+    expect(await band.find({ type: 'Text', text: /Arreglar el bug/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /2\/4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeUndefined()
+    await band.press({ key: 'fold-progress' })
+
     await band.press({ key: 'toggle' })
     expect(await band.find({ type: 'Text', text: /desactivado/ })).toBeDefined()
     await row.redraw()
@@ -107,5 +114,10 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
   expect(await band.find({ type: 'Text', text: /19%/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /messages/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /mcp tools/ })).toBeUndefined()
+  // Plegada, el contexto pierde la leyenda y conserva uso y porcentaje
+  await band.press({ key: 'fold-context' })
+  expect(await band.find({ type: 'Text', text: /messages/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /189k de 1M/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /compacta en/ })).toBeUndefined()
   await band.unmount()
 })
