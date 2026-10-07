@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { bar, currentTask, progress } from '../hooks/register'
+import { applyWorkState, bar, currentTask, progress } from '../hooks/register'
 
 const BAND = {
   component: 'AbovePrompt',
@@ -54,6 +54,17 @@ test('helpers', () => {
   expect(currentTask(PLAN)?.step.label).toBe('Arreglar el bug')
   expect(currentTask(PLAN.map(s => ({ ...s, status: 'done' as const })))).toBeUndefined()
   expect(bar(50, 10)).toEqual({ filled: '█████', empty: '─────' })
+
+  // work_state_write de claude-mem como plan
+  const write = (task: string | undefined, status?: string) => ({ list: 'demo', fields: { ...(task ? { task } : {}), ...(status ? { status } : {}) } })
+  let plan = applyWorkState([], write('A', 'todo'))
+  plan = applyWorkState(plan, write('B'))
+  plan = applyWorkState(plan, write('A', 'doing'))
+  expect(plan.map(s => `${s.label}:${s.status}`)).toEqual(['A:running', 'B:pending'])
+  plan = applyWorkState(plan, write('A', 'done'))
+  plan = applyWorkState(plan, write('B', 'dropped'))
+  expect(plan.map(s => `${s.label}:${s.status}`)).toEqual(['A:done'])
+  expect(applyWorkState(plan, write(undefined, 'done'))).toEqual(plan) // cerrar la lista no toca las tareas
 })
 
 test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herramientas', async ($, on) => {

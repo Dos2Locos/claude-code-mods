@@ -22,6 +22,8 @@ const FOLD_HOTKEY: Record<keyof Compact, string> = { progress: '1', context: '2'
 const MINI_BAR = 16
 const MIN_WIDTH = 20
 const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
+/** La lista de trabajo de claude-mem (`work_state_write`), con el prefijo MCP que tenga instalado. */
+const WORK_STATE_TOOL = /work_state_write$/
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
 const HIDDEN_ROWS = ['ToolUse', 'ToolResult', 'ToolGroup', 'ToolProgress'] as const
 
@@ -98,7 +100,25 @@ export function describeCall(tool: string, e: object): string {
 }
 
 function todoStatus(status: string): StepStatus {
-  return status === 'completed' ? 'done' : status === 'in_progress' ? 'running' : 'pending'
+  return status === 'completed' || status === 'done'
+    ? 'done'
+    : status === 'in_progress' || status === 'doing'
+      ? 'running'
+      : 'pending'
+}
+
+/** Una entrada de work_state_write con `task` crea o actualiza esa tarea del plan; `dropped` la quita. */
+export function applyWorkState(plan: Step[], e: object): Step[] {
+  const list = field(e, 'list')
+  const fields = (e as { fields?: Record<string, unknown> }).fields ?? {}
+  const task = typeof fields.task === 'string' && fields.task !== '' ? fields.task : undefined
+  if (!list || !task) return plan // estado de la lista, no una tarea
+  const id = `${list}/${task}`
+  const status = typeof fields.status === 'string' ? fields.status : undefined
+  if (status === 'dropped') return plan.filter(s => s.id !== id)
+  const existing = plan.find(s => s.id === id)
+  if (!existing) return [...plan, { id, label: task, status: todoStatus(status ?? 'todo') }]
+  return plan.map(s => (s.id === id && status ? { ...s, status: todoStatus(status) } : s))
 }
 
 export function formatDuration(ms: number): string {
@@ -160,7 +180,9 @@ async function toggleCompact($: EngineInterface, section: keyof Compact) {
 }
 
 async function trackPlan($: EngineInterface, tool: string, e: object, ran: { result?: unknown }) {
-  if (tool === 'TodoWrite') {
+  if (WORK_STATE_TOOL.test(tool)) {
+    await update($, run, r => (r ? { ...r, plan: applyWorkState(r.plan, e) } : r))
+  } else if (tool === 'TodoWrite') {
     const todos = (e as { todos?: { content: string; status: string }[] }).todos ?? []
     const plan = todos.map((t, i) => ({ id: String(i), label: t.content, status: todoStatus(t.status) }))
     await update($, run, r => (r ? { ...r, plan } : r))
@@ -220,7 +242,6 @@ export const register: Register = on => {
   // Cada turno del bucle principal empieza una ejecución nueva.
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
-    const folded = await read($, compact)
     await update($, run, () => emptyRun(now))
     return next(e)
   })
@@ -229,7 +250,7 @@ export const register: Register = on => {
     if (e.agentId !== undefined) return next(e)
 
     const tool = String(e.tool)
-    if (PLAN_TOOLS.has(tool)) {
+    if (PLAN_TOOLS.has(tool) || WORK_STATE_TOOL.test(tool)) {
       const ran = await next(e)
       await trackPlan($, tool, e, ran).catch(() => {}) // el seguimiento nunca bloquea la herramienta
       return ran
@@ -262,7 +283,6 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       const now = await $.clock.now()
-    const folded = await read($, compact)
       await update($, run, r =>
         r ? { ...r, isWorking: false, durationMs: e.durationMs || now - r.startedAt, isAborted: e.isAborted } : r,
       )
