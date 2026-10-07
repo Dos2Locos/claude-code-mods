@@ -14,6 +14,11 @@
       "name": "openspec-tracker",
       "source": "./plugins/openspec-tracker",
       "description": "Sigue los cambios de OpenSpec: fase, artefactos, tareas y acciones /opsx en un panel."
+    },
+    {
+      "name": "clean-bar",
+      "source": "./plugins/clean-bar",
+      "description": "Clean View en una caja: tarea en curso, barra de progreso y porcentaje, sin llamadas a herramientas."
     }
   ]
 }

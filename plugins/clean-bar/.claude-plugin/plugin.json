@@ -1,0 +1,9 @@
+{
+  "name": "clean-bar",
+  "version": "0.1.0",
+  "description": "Vista limpia en una barra: oculta las llamadas a herramientas y muestra la tarea en curso, una barra de progreso y el porcentaje.",
+  "author": {
+    "name": "Dos2Locos"
+  },
+  "types": "./types/index.d.ts"
+}
