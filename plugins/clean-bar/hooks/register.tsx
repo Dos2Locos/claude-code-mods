@@ -1,14 +1,16 @@
-// Clean Bar: Clean View con el aspecto de Context Bar.
-//   Oculta las filas de herramientas y, sobre el prompt, una caja con la tarea en curso,
-//   una barra de progreso del plan y su porcentaje. Sin plan, muestra solo la actividad.
-//   Se alterna con `0` (prompt vacío), el botón de la caja o /clean-bar [on|off].
+// Clean Bar: Clean View y Context Bar en una sola caja sobre el prompt.
+//   Arriba, el progreso: la tarea en curso, una barra del plan y su porcentaje (sin plan,
+//   solo la actividad). Debajo, la ventana de contexto: barra apilada por categoría y leyenda.
+//   Oculta las filas de herramientas. Se alterna con `0` (prompt vacío), el botón o /clean-bar.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Run, Step, StepStatus } from '../types'
+import type { Reading, Run, Step, StepStatus } from '../types'
+import { GLYPH, SPLIT, cells, legend, share, toReading, tokens } from './context'
 
 const isOn = atom({ plugin: 'clean-bar', key: 'isOn' } as const, true)
 const run = atom({ plugin: 'clean-bar', key: 'run' } as const, null as Run | null)
+const reading = atom({ plugin: 'clean-bar', key: 'reading' } as const, null as Reading | null)
 
 const STORE_KEY = 'isOn'
 const TOGGLE_HOTKEY = '0'
@@ -138,6 +140,14 @@ async function setOn($: EngineInterface, value: boolean) {
   await $.store.set(STORE_KEY, value)
 }
 
+// Pide a Claude Code el desglose de /context, estimado en local (sin llamadas de conteo).
+async function refreshContext($: EngineInterface) {
+  const usage = await $.session.usage({ breakdown: 'summary' })
+  const b = usage.context.breakdown
+  if (!b || !(b.rawMaxTokens > 0)) return
+  await update($, reading, () => toReading(b))
+}
+
 async function trackPlan($: EngineInterface, tool: string, e: object, ran: { result?: unknown }) {
   if (tool === 'TodoWrite') {
     const todos = (e as { todos?: { content: string; status: string }[] }).todos ?? []
@@ -174,6 +184,14 @@ export const register: Register = on => {
     await $.command
       .register({ name: 'clean-bar', description: 'Activa o desactiva Clean Bar (on | off | sin argumento para alternar)', immediate: true })
       .catch(() => {})
+    void refreshContext($).catch(() => {})
+    return r
+  })
+
+  // Un /compact vacía la ventana sin que termine un turno.
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    if (!e.agentId && 'messages' in r) void refreshContext($).catch(() => {})
     return r
   })
 
@@ -232,18 +250,18 @@ export const register: Register = on => {
         r ? { ...r, isWorking: false, durationMs: e.durationMs || now - r.startedAt, isAborted: e.isAborted } : r,
       )
     }
-    return next(e)
+    const result = await next(e)
+    if (e.agentId === undefined) await refreshContext($).catch(() => {}) // un subagente llena su propia ventana
+    return result
   })
 
   // Oculta las filas técnicas mientras está activo (ctrl+o sigue mostrando todo).
-  for (const component of HIDDEN_ROWS) {
-    on('ui.render', { component }, async ($, e, next) => {
-      const isExpanded = (e.props as { isExpanded?: boolean }).isExpanded === true
-      if (isExpanded || !(await read($, isOn))) return next(e)
-      const { Box } = $.ui.resolve(e)
-      return <Box />
-    })
-  }
+  on('ui.render', { component: HIDDEN_ROWS }, async ($, e, next) => {
+    const isExpanded = (e.props as { isExpanded?: boolean }).isExpanded === true
+    if (isExpanded || !(await read($, isOn))) return next(e)
+    const { Box } = $.ui.resolve(e)
+    return <Box />
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // lo que dibujan otros mods y Claude Code se queda debajo
@@ -266,35 +284,42 @@ export const register: Register = on => {
       )
     }
 
-    const r = await read($, run)
     const inner = e.props.bodyColumns - 4 // el borde y el relleno ocupan 4 celdas
-    if (!r || inner < MIN_WIDTH) return rest
+    if (inner < MIN_WIDTH) return rest
+    const r = await read($, run)
+    const ctx = await read($, reading)
+    const now = await $.clock.now()
 
-    const hasPlan = r.plan.length > 0
-    const { done, total, percent } = progress(r.plan)
-    const current = currentTask(r.plan)
-    const elapsed = formatDuration(r.isWorking ? (await $.clock.now()) - r.startedAt : r.durationMs)
-    const isClean = r.errors === 0 && !r.isAborted
-    const tone = r.isWorking ? ACCENT : isClean ? OK : WARN
-    const head = hasPlan
-      ? `tarea ${current && r.isWorking ? current.index + 1 : done} de ${total} · ${elapsed}`
-      : `${r.toolCalls} ${r.toolCalls === 1 ? 'paso' : 'pasos'} · ${elapsed}`
-    const { filled, empty } = bar(percent, inner)
+    // Cabecera de cada sección: rombo, nombre, y a la derecha el dato y su porcentaje.
+    const header = (title: string, info: string, percent: number | undefined, tone: string, extra?: RenderChildren) => (
+      <Box flexDirection="row" justifyContent="space-between">
+        <Box flexDirection="row">
+          <Text color={ACCENT}>{'◆ '}</Text>
+          <Text bold>{`${title} `}</Text>
+          {extra}
+        </Box>
+        <Text wrap="truncate-start">
+          <Text dimColor>{`${info} `}</Text>
+          {percent !== undefined && <Text bold color="black" backgroundColor={tone}>{` ${percent}% `}</Text>}
+        </Text>
+      </Box>
+    )
 
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
-          <Box flexDirection="row" justifyContent="space-between">
-            <Box flexDirection="row">
-              <Text color={ACCENT}>{'◆ '}</Text>
-              <Text bold>clean view </Text>
-              {toggle}
-            </Box>
-            <Text wrap="truncate-start">
-              <Text dimColor>{`${head} `}</Text>
-              {hasPlan && <Text bold color="black" backgroundColor={tone}>{` ${percent}% `}</Text>}
-            </Text>
-          </Box>
+    const progressSection = () => {
+      if (!r) return header('clean view', 'esperando una tarea', undefined, ACCENT, toggle)
+      const hasPlan = r.plan.length > 0
+      const { done, total, percent } = progress(r.plan)
+      const current = currentTask(r.plan)
+      const elapsed = formatDuration(r.isWorking ? now - r.startedAt : r.durationMs)
+      const isClean = r.errors === 0 && !r.isAborted
+      const tone = r.isWorking ? ACCENT : isClean ? OK : WARN
+      const info = hasPlan
+        ? `tarea ${current && r.isWorking ? current.index + 1 : done} de ${total} · ${elapsed}`
+        : `${r.toolCalls} ${r.toolCalls === 1 ? 'paso' : 'pasos'} · ${elapsed}`
+      const { filled, empty } = bar(percent, inner)
+      return (
+        <Box flexDirection="column">
+          {header('clean view', info, hasPlan ? percent : undefined, tone, toggle)}
           {hasPlan && (
             <Text>
               <Text color={tone}>{filled}</Text>
@@ -309,7 +334,7 @@ export const register: Register = on => {
           )}
           {r.isWorking && r.activity && (
             <Text wrap="truncate-end">
-              <Text color={COLOR[r.activity.status]}>{hasPlan ? `  ↳ ` : `${ICON[r.activity.status]} `}</Text>
+              <Text color={COLOR[r.activity.status]}>{hasPlan ? '  ↳ ' : `${ICON[r.activity.status]} `}</Text>
               <Text dimColor={hasPlan}>{r.activity.label}</Text>
             </Text>
           )}
@@ -319,6 +344,44 @@ export const register: Register = on => {
               {`${isClean ? '✓' : '!'} ${summarize(r)}`}
             </Text>
           )}
+        </Box>
+      )
+    }
+
+    const contextSection = (c: Reading) => {
+      const info = `${tokens(c.total)} de ${tokens(c.window)}${c.compactsAt ? ` · compacta en ${tokens(c.compactsAt)}` : ''}`
+      const level = c.compactsAt ? c.total / c.compactsAt : c.total / c.window
+      const tone = level >= 0.9 ? 'red' : level >= 0.7 ? 'yellow' : 'green'
+      return (
+        <Box flexDirection="column" marginTop={1}>
+          {header('context', info, c.percent, tone)}
+          <Text>
+            {cells(c, inner).map(cell => (
+              <Text color={cell.color}>{cell.text}</Text>
+            ))}
+          </Text>
+          {legend(c, inner).map(line => (
+            <Text wrap="truncate-end">
+              {line.map((sl, i) => (
+                <Text>
+                  {i > 0 && <Text>{SPLIT}</Text>}
+                  <Text color={sl.color}>{sl.kind === 'used' ? '■ ' : `${GLYPH[sl.kind]} `}</Text>
+                  <Text dimColor={sl.kind !== 'used'}>{`${sl.name} `}</Text>
+                  <Text bold={sl.kind === 'used'}>{tokens(sl.tokens)}</Text>
+                  {sl.kind === 'used' && <Text dimColor>{` ${share(sl.tokens, c.window)}`}</Text>}
+                </Text>
+              ))}
+            </Text>
+          ))}
+        </Box>
+      )
+    }
+
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
+          {progressSection()}
+          {ctx && contextSection(ctx)}
         </Box>
         {rest}
       </Box>

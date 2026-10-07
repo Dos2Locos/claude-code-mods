@@ -18,7 +18,7 @@
     {
       "name": "clean-bar",
       "source": "./plugins/clean-bar",
-      "description": "Clean View en una caja: tarea en curso, barra de progreso y porcentaje, sin llamadas a herramientas."
+      "description": "Clean View y Context Bar en una caja: tarea en curso con progreso y uso de la ventana de contexto."
     }
   ]
 }

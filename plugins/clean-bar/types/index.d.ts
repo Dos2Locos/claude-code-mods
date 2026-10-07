@@ -17,8 +17,19 @@ export type Run = {
   isAborted: boolean
 }
 
+export type Slice = { name: string; tokens: number; color: string; kind: 'used' | 'free' | 'buffer' }
+
+/** Lectura de la ventana de contexto, como la desglosa /context. */
+export type Reading = {
+  slices: Slice[]
+  total: number
+  window: number
+  percent: number
+  compactsAt?: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'clean-bar': { isOn: boolean; run: Run | null }
+    'clean-bar': { isOn: boolean; run: Run | null; reading: Reading | null }
   }
 }

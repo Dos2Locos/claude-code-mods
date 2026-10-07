@@ -1,7 +1,7 @@
 {
   "name": "clean-bar",
   "version": "0.1.0",
-  "description": "Vista limpia en una barra: oculta las llamadas a herramientas y muestra la tarea en curso, una barra de progreso y el porcentaje.",
+  "description": "Clean View y Context Bar en una caja: oculta las herramientas, muestra la tarea en curso con su progreso y el uso de la ventana de contexto.",
   "author": {
     "name": "Dos2Locos"
   },

@@ -26,6 +26,29 @@ const PLAN = [
   { id: '3', label: 'Commit', status: 'pending' as const },
 ]
 
+const BREAKDOWN = {
+  categories: [
+    { name: 'System prompt', tokens: 3_400, color: 'promptBorder', kind: 'used', isDeferred: false },
+    { name: 'MCP tools (deferred)', tokens: 40_000, color: 'inactive', kind: 'deferred', isDeferred: true },
+    { name: 'Messages', tokens: 186_000, color: 'purple_FOR_SUBAGENTS_ONLY', kind: 'used', isDeferred: false },
+    { name: 'Autocompact buffer', tokens: 50_000, color: 'inactive', kind: 'buffer', isDeferred: false },
+    { name: 'Free space', tokens: 760_600, color: 'promptBorder', kind: 'free', isDeferred: false },
+  ],
+  totalTokens: 189_400,
+  maxTokens: 1_000_000,
+  rawMaxTokens: 1_000_000,
+  percentage: 19,
+  autoCompactThreshold: 950_000,
+  isAutoCompactEnabled: true,
+  gridRows: [],
+  memoryFiles: [],
+  mcpTools: [],
+  agents: [],
+  model: 'opus',
+  apiUsage: null,
+  autocompactSource: 'model-default',
+}
+
 test('helpers', () => {
   expect(progress(PLAN)).toEqual({ done: 1, total: 4, percent: 25 })
   expect(currentTask(PLAN)?.step.label).toBe('Arreglar el bug')
@@ -39,6 +62,9 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('tool.call', async () => ({ result: {} as never }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { tokens: 189_400, window: 1_000_000, percent: 19, breakdown: BREAKDOWN }, rateLimits: {}, cost: { usd: 0 } },
+  }) as never)
   on('ui.render', async ($, e) => $.ui.resolve(e).Text({ children: `engine ${e.component}` }))
 
   await $.turn.start({ text: 'arregla el bug', turnId: 't1' })
@@ -76,5 +102,10 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
   await $.turn.complete({ answer: 'hecho', durationMs: 4000, isAborted: false, turnId: 't1', reason: 'answer' })
   const band = await $.ui.mount({ plugin: 'clean-bar', surface: 'terminal', ...BAND })
   expect(await band.find({ type: 'Text', text: /Listo en 4s · 1 archivo modificado \(app\.ts\)/ })).toBeDefined()
+  // La sección de contexto, refrescada al terminar el turno
+  expect(await band.find({ type: 'Text', text: /189k de 1M · compacta en 950k/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /19%/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /messages/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /mcp tools/ })).toBeUndefined()
   await band.unmount()
 })
