@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyWorkState, bar, currentTask, progress } from '../hooks/register'
+import { applyWorkState, bar, currentTask, mix, progress, sweep } from '../hooks/register'
 
 const BAND = {
   component: 'AbovePrompt',
@@ -54,6 +54,10 @@ test('helpers', () => {
   expect(currentTask(PLAN)?.step.label).toBe('Arreglar el bug')
   expect(currentTask(PLAN.map(s => ({ ...s, status: 'done' as const })))).toBeUndefined()
   expect(bar(50, 10)).toEqual({ filled: '█████', empty: '─────' })
+  // El tramo animado va y vuelve: 0 → 7 → 0 en una pista de 10 con 3 celdas
+  expect([0, 1, 7, 8, 13, 14].map(n => sweep(n, 10, 3))).toEqual([0, 1, 7, 6, 1, 0])
+  expect(sweep(5, 3, 3)).toBe(0)
+  expect(mix('#000000', '#ffffff', 0.5)).toBe('#808080')
 
   // work_state_write de claude-mem como plan
   const write = (task: string | undefined, status?: string) => ({ list: 'demo', fields: { ...(task ? { task } : {}), ...(status ? { status } : {}) } })
@@ -93,10 +97,13 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ plugin: 'clean-bar', surface, ...BAND })
     expect(await band.find({ type: 'Text', text: /Arreglar el bug/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeUndefined()
+    expect(await band.find({ type: 'Text', text: /arregla el bug/ })).toBeDefined() // el prompt como título
+    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeUndefined() // hecha
+    expect(await band.find({ type: 'Text', text: /Correr las pruebas/ })).toBeUndefined() // pendiente
+    expect(await band.find({ type: 'Text', text: /En curso/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /25%/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /tarea 2 de 4/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Paso 2 de 4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeUndefined() // con tarea en curso, no la acción
     expect(await band.find({ type: 'Text', text: /engine AbovePrompt/ })).toBeDefined()
 
     const row = await $.ui.mount({ plugin: 'clean-bar', surface, ...TOOL_ROW })

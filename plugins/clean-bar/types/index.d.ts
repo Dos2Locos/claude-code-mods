@@ -3,6 +3,8 @@ export type StepStatus = 'pending' | 'running' | 'done' | 'error'
 export type Step = { id: string; label: string; status: StepStatus }
 
 export type Run = {
+  /** El prompt que abrió la ejecución, para la cabecera. */
+  title?: string
   isWorking: boolean
   startedAt: number
   durationMs: number
@@ -33,6 +35,6 @@ export type Compact = { progress: boolean; context: boolean }
 
 declare module 'claude-code' {
   interface PluginState {
-    'clean-bar': { isOn: boolean; compact: Compact; run: Run | null; reading: Reading | null }
+    'clean-bar': { isOn: boolean; compact: Compact; run: Run | null; reading: Reading | null; frame: number }
   }
 }

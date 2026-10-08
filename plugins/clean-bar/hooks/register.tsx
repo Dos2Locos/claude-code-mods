@@ -1,10 +1,10 @@
 // Clean Bar: Clean View y Context Bar en una sola caja sobre el prompt.
-//   Arriba, el progreso: la tarea en curso, una barra del plan y su porcentaje (sin plan,
-//   solo la actividad). Debajo, la ventana de contexto: barra apilada por categoría y leyenda.
+//   Arriba, el progreso: el prompt, «Paso n de m» con la barra del plan y su porcentaje, y solo
+//   las tareas en curso, cada una con una barra animada de lado a lado (sin plan, la actividad). Debajo, la ventana de contexto: barra apilada por categoría y leyenda.
 //   Cada sección se pliega a una línea con `1` y `2` (prompt vacío) o su botón ▾/▸.
 //   Oculta las filas de herramientas. Se alterna con `0` (prompt vacío), el botón o /clean-bar.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren, Timer } from 'claude-code'
 
 import type { Compact, Reading, Run, Step, StepStatus } from '../types'
 import { GLYPH, SPLIT, cells, legend, share, toReading, tokens } from './context'
@@ -13,6 +13,8 @@ const isOn = atom({ plugin: 'clean-bar', key: 'isOn' } as const, true)
 const run = atom({ plugin: 'clean-bar', key: 'run' } as const, null as Run | null)
 const reading = atom({ plugin: 'clean-bar', key: 'reading' } as const, null as Reading | null)
 const compact = atom({ plugin: 'clean-bar', key: 'compact' } as const, { progress: false, context: false } as Compact)
+/** Fotograma de la animación de las barras «En curso»; avanza mientras hay un turno. */
+const frame = atom({ plugin: 'clean-bar', key: 'frame' } as const, 0)
 
 const STORE_KEY = 'isOn'
 const COMPACT_KEY = 'compact'
@@ -21,6 +23,10 @@ const FOLD_HOTKEY: Record<keyof Compact, string> = { progress: '1', context: '2'
 /** Ancho de las barras en modo compacto. */
 const MINI_BAR = 16
 const MIN_WIDTH = 20
+/** Ancho de la barra animada de cada tarea en curso. */
+const WORK_BAR = 16
+const FRAME_MS = 120
+const STATUS_LABEL = 'En curso'
 const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
 /** La lista de trabajo de claude-mem (`work_state_write`), con el prefijo MCP que tenga instalado. */
 const WORK_STATE_TOOL = /work_state_write$/
@@ -31,6 +37,7 @@ const ACCENT = '#d97757'
 const OK = '#9ece6a'
 const WARN = '#e0af68'
 const TRACK = '#808080'
+const PINK = '#f7768e'
 const ICON: Record<StepStatus, string> = { pending: '○', running: '◐', done: '✓', error: '✗' }
 const COLOR: Record<StepStatus, string | undefined> = { pending: undefined, running: ACCENT, done: OK, error: 'red' }
 
@@ -145,6 +152,25 @@ export function bar(percent: number, width: number): { filled: string; empty: st
   return { filled: '█'.repeat(n), empty: '─'.repeat(width - n) }
 }
 
+function hex(color: string): number[] {
+  return [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16))
+}
+
+/** Mezcla dos colores `#rrggbb`: `t` 0 es `from`, 1 es `to`. */
+export function mix(from: string, to: string, t: number): string {
+  const a = hex(from)
+  const b = hex(to)
+  return `#${a.map((v, i) => Math.round(v + (b[i]! - v) * t).toString(16).padStart(2, '0')).join('')}`
+}
+
+/** Inicio del tramo de `size` celdas que va y vuelve dentro de `width` en el fotograma `n`. */
+export function sweep(n: number, width: number, size: number): number {
+  const span = Math.max(0, width - size)
+  if (span === 0) return 0
+  const p = n % (span * 2)
+  return p <= span ? p : span * 2 - p
+}
+
 /** El resumen breve que se muestra al terminar. */
 export function summarize(r: Run): string {
   const parts: string[] = []
@@ -210,6 +236,8 @@ async function trackPlan($: EngineInterface, tool: string, e: object, ran: { res
 }
 
 export const register: Register = on => {
+  let ticker: Timer | undefined
+
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     const stored = await $.store.get(STORE_KEY).catch(() => undefined)
@@ -239,10 +267,12 @@ export const register: Register = on => {
     return { text: `Clean Bar ${value ? 'activado' : 'desactivado'}.` }
   })
 
-  // Cada turno del bucle principal empieza una ejecución nueva.
+  // Cada turno del bucle principal empieza una ejecución nueva; una continuación conserva el título.
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
-    await update($, run, () => emptyRun(now))
+    const title = e.text.trim() || undefined
+    await update($, run, r => ({ ...emptyRun(now), title: title ?? r?.title }))
+    ticker ??= $.clock.every(FRAME_MS, () => void update($, frame, f => f + 1).catch(() => {}))
     return next(e)
   })
 
@@ -282,6 +312,8 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
+      ticker?.cancel()
+      ticker = undefined
       const now = await $.clock.now()
       await update($, run, r =>
         r ? { ...r, isWorking: false, durationMs: e.durationMs || now - r.startedAt, isAborted: e.isAborted } : r,
@@ -327,6 +359,7 @@ export const register: Register = on => {
     const ctx = await read($, reading)
     const now = await $.clock.now()
     const folded = await read($, compact)
+    const n = await read($, frame)
 
     const fold = (section: keyof Compact) => (
       <Button
@@ -402,35 +435,63 @@ export const register: Register = on => {
         return row('clean view', buttons, left, right)
       }
 
-      const info = hasPlan ? `tarea ${position} de ${total} · ${elapsed}` : `${steps} · ${elapsed}`
-      const { filled, empty } = bar(percent, inner)
+      // Cabecera: el prompt a la izquierda y el tiempo a la derecha.
+      const header = row('clean view', buttons, r.title && <Text bold color={ACCENT}>{clip(r.title, inner)}</Text>, (
+        <Text dimColor>{elapsed}</Text>
+      ))
+      const stepLabel = `Paso ${position} de ${total} `
+      const pct = ` ${percent}%`
+      const width = Math.max(1, inner - stepLabel.length - pct.length)
+      const filled = Math.round((percent / 100) * width)
+      const planBar = (
+        <Text wrap="truncate-end">
+          <Text dimColor>{stepLabel}</Text>
+          {Array.from({ length: filled }, (_, k) => (
+            <Text color={r.isWorking ? mix(ACCENT, PINK, k / Math.max(1, width - 1)) : tone}>█</Text>
+          ))}
+          <Text color={TRACK}>{'─'.repeat(width - filled)}</Text>
+          <Text bold color={tone}>{pct}</Text>
+        </Text>
+      )
+
+      // Solo lo que está en curso: las tareas del plan, o la acción si ninguna lo está.
+      const running = r.plan.filter(s => s.status === 'running')
+      const active = running.length > 0 ? running : r.activity?.status === 'running' ? [r.activity] : []
+      const labelWidth = Math.max(8, inner - WORK_BAR - STATUS_LABEL.length - 2)
+      const size = Math.max(3, Math.round(WORK_BAR / 3))
+      const start = sweep(n, WORK_BAR, size)
+      const workBar = (
+        <Text>
+          {Array.from({ length: WORK_BAR }, (_, k) => {
+            const isLit = k >= start && k < start + size
+            return isLit ? (
+              <Text color={mix(ACCENT, PINK, (k - start + 1) / size)}>█</Text>
+            ) : (
+              <Text color={TRACK}>─</Text>
+            )
+          })}
+        </Text>
+      )
+
       return (
         <Box flexDirection="column">
-          {row('clean view', buttons, null, (
-            <Text>
-              <Text dimColor>{`${info} `}</Text>
-              {hasPlan && badge(percent, tone)}
-            </Text>
-          ))}
-          {hasPlan && (
-            <Text>
-              <Text color={tone}>{filled}</Text>
-              <Text color={TRACK}>{empty}</Text>
-            </Text>
-          )}
-          {r.isWorking && current && (
-            <Text wrap="truncate-end">
-              <Text color={COLOR[current.step.status]}>{`${ICON[current.step.status]} `}</Text>
-              <Text bold>{current.step.label}</Text>
-            </Text>
-          )}
-          {r.isWorking && r.activity && (
-            <Text wrap="truncate-end">
-              <Text color={COLOR[r.activity.status]}>{hasPlan ? '  ↳ ' : `${ICON[r.activity.status]} `}</Text>
-              <Text dimColor={hasPlan}>{r.activity.label}</Text>
-            </Text>
-          )}
-          {r.isWorking && !current && !r.activity && <Text dimColor>Pensando…</Text>}
+          {header}
+          {hasPlan ? planBar : <Text dimColor>{steps}</Text>}
+          {r.isWorking &&
+            active.map(step => (
+              <Box flexDirection="row">
+                <Box width={labelWidth} flexShrink={0}>
+                  <Text wrap="truncate-end">
+                    <Text color={PINK}>{'● '}</Text>
+                    <Text bold>{step.label}</Text>
+                  </Text>
+                </Box>
+                <Text> </Text>
+                {workBar}
+                <Text bold color={PINK}>{` ${STATUS_LABEL}`}</Text>
+              </Box>
+            ))}
+          {r.isWorking && active.length === 0 && <Text dimColor>Pensando…</Text>}
           {!r.isWorking && (
             <Text color={tone} wrap="wrap">
               {`${isClean ? '✓' : '!'} ${summarize(r)}`}

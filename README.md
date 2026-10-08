@@ -34,8 +34,8 @@ Funciona en la terminal y en la pestaña Code de la app de escritorio. Requiere 
 Clean View y Context Bar en un único mod: una caja compacta sobre el prompt, con dos secciones, que no crece con cada paso.
 
 - Oculta las filas de llamadas a herramientas (ctrl+o sigue mostrándolas).
-- Muestra solo la tarea en curso del plan (TodoWrite, Tasks o `work_state_write` de claude-mem) y, debajo, la acción que se está ejecutando (`↳ Editar app.ts`).
-- Barra de progreso y porcentaje del plan, con tarea `n de m` y tiempo transcurrido.
+- Cabecera con el prompt del turno y el tiempo transcurrido; debajo, `Paso n de m` con la barra del plan en degradado y su porcentaje.
+- Muestra solo las tareas en curso del plan (TodoWrite, Tasks o `work_state_write` de claude-mem), no las hechas ni las pendientes, cada una con una barra `En curso` animada de lado a lado. Si ninguna tarea está en curso, muestra la acción que se ejecuta.
 - Sin plan, muestra la acción actual y el número de pasos (no hay porcentaje que calcular).
 - Al terminar, resumen breve: archivos modificados, comandos y errores.
 - Sección de contexto (como context-bar): tokens usados de la ventana, umbral de autocompactado, porcentaje, barra apilada por categoría y leyenda. Se refresca al acabar cada turno y tras `/compact`.
