@@ -1,3 +1,4 @@
 # Tipos que Claude Code genera al cargar cada mod
 plugins/*/.claude-plugin/types/
 .DS_Store
+.claude/
