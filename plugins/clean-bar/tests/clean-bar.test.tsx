@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyWorkState, bar, currentTask, progress } from '../hooks/register'
+import { applyWorkState, bar, currentTask, mix, progress, stepState, visibleRange } from '../hooks/register'
 
 const BAND = {
   component: 'AbovePrompt',
@@ -54,6 +54,11 @@ test('helpers', () => {
   expect(currentTask(PLAN)?.step.label).toBe('Arreglar el bug')
   expect(currentTask(PLAN.map(s => ({ ...s, status: 'done' as const })))).toBeUndefined()
   expect(bar(50, 10)).toEqual({ filled: '█████', empty: '─────' })
+  expect(mix('#000000', '#ffffff', 0.5)).toBe('#808080')
+  expect(PLAN.map((_, i) => stepState(PLAN, i))).toEqual(['Hecho', 'En curso', 'Siguiente', 'Pendiente'])
+  expect(visibleRange(10, 0, 6)).toEqual({ start: 0, end: 6 })
+  expect(visibleRange(10, 5, 6)).toEqual({ start: 4, end: 10 })
+  expect(visibleRange(10, 9, 6)).toEqual({ start: 4, end: 10 })
 
   // work_state_write de claude-mem como plan
   const write = (task: string | undefined, status?: string) => ({ list: 'demo', fields: { ...(task ? { task } : {}), ...(status ? { status } : {}) } })
@@ -67,7 +72,7 @@ test('helpers', () => {
   expect(applyWorkState(plan, write(undefined, 'done'))).toEqual(plan) // cerrar la lista no toca las tareas
 })
 
-test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herramientas', async ($, on) => {
+test('muestra el plan con su barra, porcentaje y estado por tarea; oculta las herramientas', async ($, on) => {
   mock.clock(on, { now: 1000 })
   mock.store(on)
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
@@ -93,9 +98,11 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ plugin: 'clean-bar', surface, ...BAND })
     expect(await band.find({ type: 'Text', text: /Arreglar el bug/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeUndefined()
+    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /25%/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /tarea 2 de 4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Paso 2 de 4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /En curso/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Siguiente/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /engine AbovePrompt/ })).toBeDefined()
 
@@ -105,6 +112,7 @@ test('muestra solo la tarea en curso, la barra y el porcentaje; oculta las herra
     await band.press({ key: 'fold-progress' })
     expect(await band.find({ type: 'Text', text: /Arreglar el bug/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /2\/4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeUndefined()
     expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeUndefined()
     await band.press({ key: 'fold-progress' })
 

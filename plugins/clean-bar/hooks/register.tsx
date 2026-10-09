@@ -31,11 +31,22 @@ const ACCENT = '#d97757'
 const OK = '#9ece6a'
 const WARN = '#e0af68'
 const TRACK = '#808080'
+// Degradados del plan: naranja a rosa mientras trabaja, verdes al terminar.
+const ORANGE = '#ff9e64'
+const PINK = '#ff5f87'
+const GREEN_FROM = '#2f9e44'
+const GREEN_TO = '#9ece6a'
+const SHADE = '#3b4252' // el fondo de las barras vacías
+/** Tareas del plan visibles a la vez, alrededor de la actual. */
+const MAX_ROWS = 6
+/** Parte de la mini barra que llena la tarea en curso (no hay progreso real por tarea). */
+const RUNNING_SHARE = 0.4
 const ICON: Record<StepStatus, string> = { pending: '○', running: '◐', done: '✓', error: '✗' }
 const COLOR: Record<StepStatus, string | undefined> = { pending: undefined, running: ACCENT, done: OK, error: 'red' }
 
-const emptyRun = (startedAt: number): Run => ({
+const emptyRun = (startedAt: number, title: string): Run => ({
   isWorking: true,
+  title,
   startedAt,
   durationMs: 0,
   plan: [],
@@ -145,6 +156,27 @@ export function bar(percent: number, width: number): { filled: string; empty: st
   return { filled: '█'.repeat(n), empty: '─'.repeat(width - n) }
 }
 
+/** Mezcla dos colores `#rrggbb`: `t` 0 da `a`, 1 da `b`. */
+export function mix(a: string, b: string, t: number): string {
+  const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
+  return `#${[0, 1, 2]
+    .map(i => Math.round(channel(a, i) + (channel(b, i) - channel(a, i)) * t).toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+/** El estado de cada tarea en palabras; la primera pendiente es «Siguiente». */
+export function stepState(plan: Step[], index: number): string {
+  const status = plan[index]!.status
+  if (status !== 'pending') return { done: 'Hecho', running: 'En curso', error: 'Error' }[status]
+  return plan.findIndex(s => s.status === 'pending') === index ? 'Siguiente' : 'Pendiente'
+}
+
+/** Qué tramo del plan cabe: hasta `max` tareas, con la anterior a la actual arriba. */
+export function visibleRange(total: number, focus: number, max: number): { start: number; end: number } {
+  const start = Math.min(Math.max(focus - 1, 0), Math.max(total - max, 0))
+  return { start, end: Math.min(total, start + max) }
+}
+
 /** El resumen breve que se muestra al terminar. */
 export function summarize(r: Run): string {
   const parts: string[] = []
@@ -242,7 +274,7 @@ export const register: Register = on => {
   // Cada turno del bucle principal empieza una ejecución nueva.
   on('turn.start', async ($, e, next) => {
     const now = await $.clock.now()
-    await update($, run, () => emptyRun(now))
+    await update($, run, () => emptyRun(now, e.text))
     return next(e)
   })
 
@@ -402,40 +434,83 @@ export const register: Register = on => {
         return row('clean view', buttons, left, right)
       }
 
-      const info = hasPlan ? `tarea ${position} de ${total} · ${elapsed}` : `${steps} · ${elapsed}`
-      const { filled, empty } = bar(percent, inner)
+      const summary = (
+        <Text color={tone} wrap="wrap">
+          {`${isClean ? '✓' : '!'} ${summarize(r)}`}
+        </Text>
+      )
+
+      if (!hasPlan) {
+        return (
+          <Box flexDirection="column">
+            {row('clean view', buttons, null, <Text dimColor>{`${steps} · ${elapsed}`}</Text>)}
+            {r.isWorking && r.activity && (
+              <Text wrap="truncate-end">
+                <Text color={COLOR[r.activity.status]}>{`${ICON[r.activity.status]} `}</Text>
+                <Text>{r.activity.label}</Text>
+              </Text>
+            )}
+            {r.isWorking && !r.activity && <Text dimColor>Pensando…</Text>}
+            {!r.isWorking && summary}
+          </Box>
+        )
+      }
+
+      // Con plan: cabecera con el prompt, barra del plan y una fila por tarea con su mini barra.
+      const [from, to] = r.isWorking ? [ORANGE, PINK] : isClean ? [GREEN_FROM, GREEN_TO] : [ORANGE, WARN]
+      const blocks = (count: number, width: number, a: string, b: string) => (
+        <Text>
+          {Array.from({ length: width }, (_, i) => (
+            <Text color={i < count ? mix(a, b, count > 1 ? i / (count - 1) : 1) : SHADE}>█</Text>
+          ))}
+        </Text>
+      )
+      const title = clip(r.title, Math.max(inner - 24, MIN_WIDTH)) || 'clean view'
+      const stepText = `Paso ${position} de ${total} `
+      const pct = ` ${percent}%`
+      const width = Math.max(inner - stepText.length - pct.length, 0)
+      const { start, end } = visibleRange(total, current?.index ?? total - 1, MAX_ROWS)
+      const labelWidth = Math.min(Math.max(...r.plan.map(s => s.label.length)) + 2, Math.floor(inner * 0.45))
+      const hidden = total - (end - start)
       return (
         <Box flexDirection="column">
-          {row('clean view', buttons, null, (
-            <Text>
-              <Text dimColor>{`${info} `}</Text>
-              {hasPlan && badge(percent, tone)}
-            </Text>
-          ))}
-          {hasPlan && (
-            <Text>
-              <Text color={tone}>{filled}</Text>
-              <Text color={TRACK}>{empty}</Text>
-            </Text>
-          )}
-          {r.isWorking && current && (
-            <Text wrap="truncate-end">
-              <Text color={COLOR[current.step.status]}>{`${ICON[current.step.status]} `}</Text>
-              <Text bold>{current.step.label}</Text>
-            </Text>
-          )}
-          {r.isWorking && r.activity && (
-            <Text wrap="truncate-end">
-              <Text color={COLOR[r.activity.status]}>{hasPlan ? '  ↳ ' : `${ICON[r.activity.status]} `}</Text>
-              <Text dimColor={hasPlan}>{r.activity.label}</Text>
-            </Text>
-          )}
-          {r.isWorking && !current && !r.activity && <Text dimColor>Pensando…</Text>}
-          {!r.isWorking && (
-            <Text color={tone} wrap="wrap">
-              {`${isClean ? '✓' : '!'} ${summarize(r)}`}
-            </Text>
-          )}
+          <Box flexDirection="row" justifyContent="space-between">
+            <Box flexDirection="row" flexShrink={1}>
+              <Text color={to}>{'✱ '}</Text>
+              <Text bold wrap="truncate-end">
+                {[...title].map((c, i, all) => (
+                  <Text color={mix(from, to, all.length > 1 ? i / (all.length - 1) : 0)}>{c}</Text>
+                ))}
+              </Text>
+              <Text> </Text>
+              {buttons}
+            </Box>
+            <Text dimColor>{elapsed}</Text>
+          </Box>
+          <Text wrap="truncate-end">
+            <Text dimColor>{stepText}</Text>
+            {blocks(Math.round((percent / 100) * width), width, from, to)}
+            <Text bold color={to}>{pct}</Text>
+          </Text>
+          {r.plan.slice(start, end).map((s, k) => {
+            const isRunning = s.status === 'running'
+            const isPending = s.status === 'pending'
+            const fill = isPending ? 0 : isRunning ? Math.round(MINI_BAR * RUNNING_SHARE) : MINI_BAR
+            const [a, b] = s.status === 'done' ? [GREEN_FROM, GREEN_TO] : s.status === 'error' ? [WARN, 'red'] : [ORANGE, PINK]
+            return (
+              <Text wrap="truncate-end">
+                <Text color={isRunning ? PINK : COLOR[s.status]}>{`${isRunning ? '●' : ICON[s.status]} `}</Text>
+                <Text bold={isRunning} dimColor={isPending}>{clip(s.label, labelWidth - 2).padEnd(labelWidth)}</Text>
+                {blocks(fill, MINI_BAR, a, b)}
+                <Text bold={isRunning} color={isRunning ? PINK : undefined} dimColor={isPending}>
+                  {` ${stepState(r.plan, start + k)}`}
+                </Text>
+              </Text>
+            )
+          })}
+          {hidden > 0 && <Text dimColor>{`  … y ${hidden} ${hidden === 1 ? 'tarea' : 'tareas'} más`}</Text>}
+          {r.isWorking && r.activity && <Text dimColor wrap="truncate-end">{`  ↳ ${r.activity.label}`}</Text>}
+          {!r.isWorking && summary}
         </Box>
       )
     }
@@ -498,7 +573,7 @@ export const register: Register = on => {
     // Separación entre secciones solo cuando la de arriba ocupa varias líneas.
     return (
       <Box flexDirection="column">
-        <Box flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
+        <Box flexDirection="column" borderStyle="round" borderColor={r?.isWorking && r.plan.length > 0 ? PINK : 'inactive'} paddingX={1}>
           {progressSection()}
           {ctx && <Box marginTop={folded.progress ? 0 : 1}>{contextSection(ctx)}</Box>}
         </Box>

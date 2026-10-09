@@ -4,6 +4,8 @@ export type Step = { id: string; label: string; status: StepStatus }
 
 export type Run = {
   isWorking: boolean
+  /** El prompt que abrió el turno, para la cabecera. */
+  title: string
   startedAt: number
   durationMs: number
   /** El plan del modelo (TodoWrite / TaskCreate), cuando lo hay. */
