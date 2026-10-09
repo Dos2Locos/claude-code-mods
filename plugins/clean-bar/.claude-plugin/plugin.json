@@ -1,6 +1,6 @@
 {
   "name": "clean-bar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Clean View y Context Bar en una caja: oculta las herramientas, muestra la tarea en curso con su progreso y el uso de la ventana de contexto.",
   "author": {
     "name": "Dos2Locos"
