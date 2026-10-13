@@ -31,14 +31,15 @@ Funciona en la terminal y en la pestaña Code de la app de escritorio. Requiere 
 
 ### clean-bar
 
-Clean View y Context Bar en un único mod: una sola línea sobre el prompt, con dos secciones que despliegan su detalle al pulsarlas.
+Clean View y Context Bar en un único mod: una sola línea sobre el prompt, con tres secciones que despliegan su detalle al pulsarlas.
 
 - Oculta las filas de llamadas a herramientas (ctrl+o sigue mostrándolas).
 - Con plan (TodoWrite, Tasks o `work_state_write` de claude-mem): el prompt como cabecera en degradado, `Paso n de m` con barra y porcentaje, y una fila por tarea con su mini barra y estado (Hecho, En curso, Siguiente, Pendiente). Muestra hasta 6 tareas alrededor de la actual y, debajo, la acción en curso (`↳ Editar app.ts`).
 - Sin plan, muestra la acción actual y el número de pasos (no hay porcentaje que calcular).
 - Al terminar, resumen breve: archivos modificados, comandos y errores.
 - Sección de contexto (como context-bar): tokens usados de la ventana, umbral de autocompactado, porcentaje, barra apilada por categoría y leyenda. Se refresca al acabar cada turno y tras `/compact`.
-- Por defecto ocupa una línea: la tarea en curso con mini barra, posición y porcentaje, y el uso de contexto con mini barra apilada y porcentaje. Pulsar una sección, o `1` (progreso) y `2` (contexto) en el prompt vacío, despliega su detalle en una caja debajo (una sección a la vez); pulsarla otra vez la recoge.
+- Por defecto ocupa una línea: la tarea en curso con mini barra, posición y porcentaje; el uso de contexto con mini barra apilada y porcentaje; y la vida de la caché de prompts, una barra que se vacía con la cuenta atrás (`◷ 42:13`, verde, amarilla bajo el 50 % y roja bajo el 20 %; `◷ fría` al caducar). Pulsar una sección, o `1` (progreso), `2` (contexto) y `3` (caché) en el prompt vacío, despliega su detalle en una caja debajo (una sección a la vez); pulsarla otra vez la recoge.
+- La cuenta atrás parte de la última petición del hilo principal. El TTL no lo da el motor: es la opción `cacheTtl` del mod (`1h` por defecto, el de las suscripciones; `5m` con clave de API sin `ENABLE_PROMPT_CACHING_1H`).
 - Se activa y desactiva con `0` (prompt vacío), el botón de la caja o `/clean-bar [on|off]`.
 
 Sustituye a clean-view y context-bar: conviene no tenerlos activos a la vez.

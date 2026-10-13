@@ -1,22 +1,27 @@
 // Clean Bar: Clean View y Context Bar en una sola caja sobre el prompt.
-//   Una sola línea: el progreso (tarea en curso, mini barra y porcentaje) y el contexto
-//   (mini barra apilada y porcentaje). Pulsar una sección, o `1` y `2` (prompt vacío),
-//   despliega su detalle debajo: el plan completo o el desglose de la ventana.
+//   Una sola línea: el progreso (tarea en curso, mini barra y porcentaje), el contexto
+//   (mini barra apilada y porcentaje) y la vida de la caché de prompts (cuenta atrás desde la
+//   última petición). Pulsar una sección, o `1`, `2` y `3` (prompt vacío), despliega su detalle.
 //   Oculta las filas de herramientas. Se alterna con `0` (prompt vacío), el botón o /clean-bar.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Reading, Run, Section, Step, StepStatus } from '../types'
-import { GLYPH, SPLIT, cells, legend, share, toReading, tokens } from './context'
+import type { Cache, Reading, Run, Section, Step, StepStatus } from '../types'
+import { GLYPH, SPLIT, cells, fromTotals, legend, share, toReading, tokens } from './context'
 
 const isOn = atom({ plugin: 'clean-bar', key: 'isOn' } as const, true)
 const run = atom({ plugin: 'clean-bar', key: 'run' } as const, null as Run | null)
 const reading = atom({ plugin: 'clean-bar', key: 'reading' } as const, null as Reading | null)
 const open = atom({ plugin: 'clean-bar', key: 'open' } as const, null as Section | null)
+const cache = atom({ plugin: 'clean-bar', key: 'cache' } as const, null as Cache | null)
 
 const STORE_KEY = 'isOn'
 const TOGGLE_HOTKEY = '0'
-const SECTION_HOTKEY: Record<Section, string> = { progress: '1', context: '2' }
+const SECTION_HOTKEY: Record<Section, string> = { progress: '1', context: '2', cache: '3' }
+const MINUTE = 60_000
+const CACHE_TTL_MS: Record<string, number> = { '5m': 5 * MINUTE, '1h': 60 * MINUTE }
+/** Cada cuánto se redibuja la cuenta atrás mientras la caché está caliente. */
+const TICK_MS = 1000
 /** Ancho de las mini barras de cada tarea en el detalle. */
 const MINI_BAR = 16
 /** Ancho de las barras de la línea. */
@@ -25,6 +30,9 @@ const GAP = '  '
 /** Lo que ocupa un botón `plain` con atajo antes de su texto: `1: `. */
 const HOTKEY_WIDTH = 3
 const MIN_LABEL = 8
+
+/** El temporizador de la cuenta atrás; una recarga del módulo arranca otro. */
+let ticker: { cancel: () => void } | undefined
 const MIN_WIDTH = 20
 const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
 /** La lista de trabajo de claude-mem (`work_state_write`), con el prefijo MCP que tenga instalado. */
@@ -198,6 +206,19 @@ export function summarize(r: Run): string {
   return `${r.isAborted ? 'Interrumpido' : 'Listo'} en ${formatDuration(r.durationMs)} · ${parts.join(' · ')}`
 }
 
+/** Cuenta atrás compacta: `42:13`. */
+export function countdown(ms: number): string {
+  const seconds = Math.max(Math.ceil(ms / 1000), 0)
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** Lo que le queda a la caché, de 0 a 1, y su color: verde, amarillo al 50 % y rojo al 20 %. */
+export function cacheLife(c: Cache, now: number, ttl: number): { left: number; share: number; tone: string } {
+  const left = Math.max(c.at + ttl - now, 0)
+  const share = left / ttl
+  return { left, share, tone: share > 0.5 ? 'green' : share > 0.2 ? 'yellow' : 'red' }
+}
+
 async function setOn($: EngineInterface, value: boolean) {
   await update($, isOn, () => value)
   await $.store.set(STORE_KEY, value)
@@ -206,9 +227,9 @@ async function setOn($: EngineInterface, value: boolean) {
 // Pide a Claude Code el desglose de /context, estimado en local (sin llamadas de conteo).
 async function refreshContext($: EngineInterface) {
   const usage = await $.session.usage({ breakdown: 'summary' })
-  const b = usage.context.breakdown
-  if (!b || !(b.rawMaxTokens > 0)) return
-  await update($, reading, () => toReading(b))
+  const { breakdown: b, tokens: total, window, percent } = usage.context
+  if (b && b.rawMaxTokens > 0) await update($, reading, () => toReading(b))
+  else if (total !== undefined && window > 0) await update($, reading, () => fromTotals(total, window, percent))
 }
 
 async function toggleSection($: EngineInterface, section: Section) {
@@ -245,7 +266,9 @@ async function trackPlan($: EngineInterface, tool: string, e: object, ran: { res
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const ttl = CACHE_TTL_MS[String(options.cacheTtl)] ?? CACHE_TTL_MS['1h']!
+
   on('session.start', async ($, e, next) => {
     const r = await next(e)
     const stored = await $.store.get(STORE_KEY).catch(() => undefined)
@@ -254,7 +277,31 @@ export const register: Register = on => {
       .register({ name: 'clean-bar', description: 'Activa o desactiva Clean Bar (on | off | sin argumento para alternar)', immediate: true })
       .catch(() => {})
     void refreshContext($).catch(() => {})
+    // Redibuja la cuenta atrás cada segundo mientras la caché vive (y una vez más al caducar).
+    ticker?.cancel()
+    ticker = $.clock.every(TICK_MS, () => {
+      void (async () => {
+        const c = await read($, cache)
+        if (c && (await $.clock.now()) - c.at <= ttl + TICK_MS) $.ui.invalidate('ui.render')
+      })().catch(() => {})
+    })
     return r
+  })
+
+  // Cada petición del hilo principal renueva su caché de prompts.
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    const usage = result.usage
+    if (e.agentId === undefined && usage) {
+      const at = await $.clock.now()
+      await update($, cache, () => ({
+        at,
+        read: usage.cache_read_input_tokens,
+        write: usage.cache_creation_input_tokens,
+        uncached: usage.input_tokens,
+      })).catch(() => {})
+    }
+    return result
   })
 
   // Un /compact vacía la ventana sin que termine un turno.
@@ -361,6 +408,7 @@ export const register: Register = on => {
     const ctx = await read($, reading)
     const now = await $.clock.now()
     const opened = await read($, open)
+    const lastCall = await read($, cache)
     const inner = width - 4 // el borde y el relleno del detalle ocupan 4 celdas
 
     const badge = (percent: number, tone: string) => (
@@ -405,9 +453,15 @@ export const register: Register = on => {
     const level = ctx ? ctx.total / (ctx.compactsAt ?? ctx.window) : 0
     const ctxTone = level >= 0.9 ? 'red' : level >= 0.7 ? 'yellow' : 'green'
     const progressRight = hasPlan ? `${'█'.repeat(LINE_BAR)} ${position}/${total}  ${percent}% ` : ` ${steps} · ${elapsed}`
-    const contextWidth = ctx ? GAP.length + HOTKEY_WIDTH + 2 + LINE_BAR + ` ${used}  ${ctx.percent}% `.length : 0
+    const life = lastCall ? cacheLife(lastCall, now, ttl) : undefined
+    const cacheText = !life ? '◷ —' : life.left > 0 ? `◷ ${'█'.repeat(LINE_BAR)} ${countdown(life.left)}` : '◷ fría'
+    const contextWidth = GAP.length + HOTKEY_WIDTH + 2 + (ctx ? LINE_BAR + ` ${used}  ${ctx.percent}% `.length : 'contexto …'.length)
+    const cacheWidth = GAP.length + HOTKEY_WIDTH + 2 + cacheText.length
     const toggleWidth = GAP.length + HOTKEY_WIDTH + toggleLabel.length
-    const labelWidth = Math.max(width - HOTKEY_WIDTH - 2 - progressRight.length - contextWidth - toggleWidth, MIN_LABEL)
+    const labelWidth = Math.max(
+      width - HOTKEY_WIDTH - 2 - progressRight.length - contextWidth - cacheWidth - toggleWidth,
+      MIN_LABEL,
+    )
 
     const progressLine = () => {
       if (!r) return <Text dimColor>esperando una tarea</Text>
@@ -436,7 +490,43 @@ export const register: Register = on => {
       )
     }
 
-    const contextLine = (c: Reading) => (
+    const cacheLine = () => {
+      if (!life) return <Text dimColor>◷ —</Text>
+      if (life.left === 0) return <Text dimColor>◷ fría</Text>
+      const drain = bar(life.share * 100, LINE_BAR)
+      return (
+        <Text>
+          <Text color={life.tone}>{`◷ ${drain.filled}`}</Text>
+          <Text color={TRACK}>{drain.empty}</Text>
+          <Text bold color={life.tone}>{` ${countdown(life.left)}`}</Text>
+        </Text>
+      )
+    }
+
+    const cacheDetail = () => {
+      if (!lastCall || !life) return <Text dimColor>Aún no hay peticiones al modelo en esta sesión.</Text>
+      const isWarm = life.left > 0
+      const ttlText = ttl >= 60 * MINUTE ? '1h' : `${Math.round(ttl / MINUTE)}m`
+      const state = isWarm ? ` · caduca en ${formatDuration(life.left)}` : ' · la próxima petición la vuelve a escribir'
+      const drain = bar(life.share * 100, inner)
+      return (
+        <Box flexDirection="column">
+          <Text>
+            <Text bold color={isWarm ? life.tone : undefined} dimColor={!isWarm}>{isWarm ? 'Caché caliente' : 'Caché fría'}</Text>
+            <Text dimColor>{`${state} (TTL ${ttlText}) · última petición hace ${formatDuration(now - lastCall.at)}`}</Text>
+          </Text>
+          <Text>
+            <Text color={life.tone}>{drain.filled}</Text>
+            <Text color={TRACK}>{drain.empty}</Text>
+          </Text>
+          <Text dimColor>
+            {`Última petición: ${tokens(lastCall.read)} leídos de caché · ${tokens(lastCall.write)} escritos · ${tokens(lastCall.uncached)} sin caché`}
+          </Text>
+        </Box>
+      )
+    }
+
+    const contextLine = (c: Reading | null) => !c ? <Text dimColor>contexto …</Text> : (
       <Text>
         {stacked(c, LINE_BAR)}
         <Text dimColor>{` ${used} `}</Text>
@@ -525,7 +615,14 @@ export const register: Register = on => {
       </Box>
     )
 
-    const detail = opened === 'progress' ? progressDetail() : opened === 'context' && ctx ? contextDetail(ctx) : null
+    const detail =
+      opened === 'progress'
+        ? progressDetail()
+        : opened === 'context' && ctx
+          ? contextDetail(ctx)
+          : opened === 'cache'
+            ? cacheDetail()
+            : null
     const isPlanRunning = r?.isWorking === true && hasPlan
     return (
       <Box flexDirection="column">
@@ -534,8 +631,10 @@ export const register: Register = on => {
             {section('progress', progressLine())}
           </Box>
           <Box flexDirection="row">
-            {ctx && <Text>{GAP}</Text>}
-            {ctx && section('context', contextLine(ctx))}
+            <Text>{GAP}</Text>
+            {section('context', contextLine(ctx))}
+            <Text>{GAP}</Text>
+            {section('cache', cacheLine())}
             <Text>{GAP}</Text>
             {toggle}
           </Box>

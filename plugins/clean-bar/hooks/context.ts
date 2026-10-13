@@ -36,6 +36,19 @@ export function toReading(b: {
   }
 }
 
+// Sin desglose: solo lo usado y lo libre, para que la línea nunca se quede sin contexto.
+export function fromTotals(total: number, window: number, percent?: number): Reading {
+  return {
+    slices: [
+      { name: 'usado', tokens: total, color: MESSAGES, kind: 'used' },
+      { name: 'libre', tokens: Math.max(window - total, 0), color: FREE, kind: 'free' },
+    ],
+    total,
+    window,
+    percent: percent ?? Math.round((total / window) * 100),
+  }
+}
+
 // The bar as runs of cells: each slice gets its share of `width`, a used one at least one cell.
 export function cells(r: Reading, width: number) {
   const sizes = r.slices.map(s => Math.max(s.kind === 'used' ? 1 : 0, Math.round((s.tokens / r.window) * width)))

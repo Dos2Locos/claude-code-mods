@@ -31,10 +31,13 @@ export type Reading = {
 }
 
 /** Las secciones de la línea; cada una despliega su detalle al pulsarla. */
-export type Section = 'progress' | 'context'
+export type Section = 'progress' | 'context' | 'cache'
+
+/** La última petición del hilo principal: cuándo llegó y cómo usó la caché de prompts. */
+export type Cache = { at: number; read: number; write: number; uncached: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'clean-bar': { isOn: boolean; open: Section | null; run: Run | null; reading: Reading | null }
+    'clean-bar': { isOn: boolean; open: Section | null; cache: Cache | null; run: Run | null; reading: Reading | null }
   }
 }

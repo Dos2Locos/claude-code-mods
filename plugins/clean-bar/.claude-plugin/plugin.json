@@ -5,5 +5,17 @@
   "author": {
     "name": "Dos2Locos"
   },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "cacheTtl": {
+      "type": "string",
+      "title": "Vida de la caché",
+      "description": "TTL de la caché de prompts de la sesión: 1h con suscripción o ENABLE_PROMPT_CACHING_1H, 5m por defecto con clave de API.",
+      "options": [
+        "1h",
+        "5m"
+      ],
+      "default": "1h"
+    }
+  }
 }

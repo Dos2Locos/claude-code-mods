@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { applyWorkState, bar, currentTask, mix, progress, stepState, visibleRange } from '../hooks/register'
+import { applyWorkState, bar, cacheLife, countdown, currentTask, mix, progress, stepState, visibleRange } from '../hooks/register'
 
 const BAND = {
   component: 'AbovePrompt',
@@ -59,6 +59,12 @@ test('helpers', () => {
   expect(visibleRange(10, 0, 6)).toEqual({ start: 0, end: 6 })
   expect(visibleRange(10, 5, 6)).toEqual({ start: 4, end: 10 })
   expect(visibleRange(10, 9, 6)).toEqual({ start: 4, end: 10 })
+  expect(countdown(42 * 60_000 + 12_500)).toBe('42:13')
+  expect(countdown(-5)).toBe('0:00')
+  const call = { at: 0, read: 0, write: 0, uncached: 0 }
+  expect(cacheLife(call, 15 * 60_000, 60 * 60_000)).toEqual({ left: 45 * 60_000, share: 0.75, tone: 'green' })
+  expect(cacheLife(call, 50 * 60_000, 60 * 60_000).tone).toBe('red')
+  expect(cacheLife(call, 2 * 60 * 60_000, 60 * 60_000).left).toBe(0)
 
   // work_state_write de claude-mem como plan
   const write = (task: string | undefined, status?: string) => ({ list: 'demo', fields: { ...(task ? { task } : {}), ...(status ? { status } : {}) } })
@@ -141,5 +147,58 @@ test('muestra el plan con su barra, porcentaje y estado por tarea; oculta las he
   expect(await band.find({ type: 'Text', text: /messages/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /mcp tools/ })).toBeUndefined()
   expect(await band.find({ type: 'Text', text: /1 archivo modificado/ })).toBeUndefined()
+  await band.unmount()
+})
+
+test('cuenta atrás de la caché desde la última petición del hilo principal', async ($, on) => {
+  const clock = mock.clock(on, { now: 0 })
+  mock.store(on)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: {}, cost: { usd: 0 } } }) as never)
+  on('ui.render', async ($, e) => $.ui.resolve(e).Text({ children: `engine ${e.component}` }))
+  on('turn.step', async function* (_$, e) {
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn' as const,
+      usage: { model: 'opus', input_tokens: 340, output_tokens: 10, cache_read_input_tokens: 128_000, cache_creation_input_tokens: 2_100 },
+    }
+  })
+
+  const band = await $.ui.mount({ plugin: 'clean-bar', surface: 'terminal', ...BAND })
+  expect(await band.find({ type: 'Text', text: /◷ —/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /contexto …/ })).toBeDefined() // la sección de contexto siempre está
+
+  const step = $.turn.step({ turnId: 't1', index: 0, model: 'opus', messageCount: 1 })
+  for await (const _ of step);
+  await band.redraw()
+  expect(await band.find({ type: 'Text', text: /60:00/ })).toBeDefined()
+
+  await clock.advance(17 * 60_000 + 47_000)
+  await band.redraw()
+  expect(await band.find({ type: 'Text', text: /42:13/ })).toBeDefined()
+  await band.press({ key: 'fold-cache' })
+  expect(await band.find({ type: 'Text', text: /Caché caliente/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /caduca en 42m 13s \(TTL 1h\)/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /128k leídos de caché · 2.1k escritos · 340 sin caché/ })).toBeDefined()
+
+  await clock.advance(60 * 60_000)
+  await band.redraw()
+  expect(await band.find({ type: 'Text', text: /◷ fría/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /Caché fría/ })).toBeDefined()
+  await band.unmount()
+})
+
+test('TTL de 5 minutos por opción', { options: { cacheTtl: '5m' } }, async ($, on) => {
+  mock.clock(on, { now: 0 })
+  mock.store(on)
+  on('ui.render', async ($, e) => $.ui.resolve(e).Text({ children: `engine ${e.component}` }))
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: { model: 'opus', input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+  })
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'opus', messageCount: 1 }));
+  const band = await $.ui.mount({ plugin: 'clean-bar', surface: 'terminal', ...BAND })
+  expect(await band.find({ type: 'Text', text: /5:00/ })).toBeDefined()
   await band.unmount()
 })
