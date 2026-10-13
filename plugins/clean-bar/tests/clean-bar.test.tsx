@@ -97,24 +97,25 @@ test('muestra el plan con su barra, porcentaje y estado por tarea; oculta las he
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const band = await $.ui.mount({ plugin: 'clean-bar', surface, ...BAND })
+    // Por defecto, una línea: la tarea en curso, posición y porcentaje; sin el plan ni la acción
     expect(await band.find({ type: 'Text', text: /Arreglar el bug/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /2\/4/ })).toBeDefined()
     expect(await band.find({ type: 'Text', text: /25%/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Paso 2 de 4/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /En curso/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Siguiente/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeUndefined()
+    expect(await band.find({ type: 'Text', text: /Paso 2 de 4/ })).toBeUndefined()
     expect(await band.find({ type: 'Text', text: /engine AbovePrompt/ })).toBeDefined()
 
     const row = await $.ui.mount({ plugin: 'clean-bar', surface, ...TOOL_ROW })
     expect(await row.find({ type: 'Text' })).toBeUndefined()
-    // Plegada, la sección de progreso cabe en una línea: la tarea y el porcentaje, sin la acción
+    // Al pulsar la sección, el detalle del plan
     await band.press({ key: 'fold-progress' })
-    expect(await band.find({ type: 'Text', text: /Arreglar el bug/ })).toBeDefined()
-    expect(await band.find({ type: 'Text', text: /2\/4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Paso 2 de 4/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /En curso/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Siguiente/ })).toBeDefined()
+    expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeDefined()
+    await band.press({ key: 'fold-progress' })
     expect(await band.find({ type: 'Text', text: /Leer el código/ })).toBeUndefined()
-    expect(await band.find({ type: 'Text', text: /Editar app\.ts/ })).toBeUndefined()
-    await band.press({ key: 'fold-progress' })
 
     await band.press({ key: 'toggle' })
     expect(await band.find({ type: 'Text', text: /desactivado/ })).toBeDefined()
@@ -127,16 +128,18 @@ test('muestra el plan con su barra, porcentaje y estado por tarea; oculta las he
 
   await $.turn.complete({ answer: 'hecho', durationMs: 4000, isAborted: false, turnId: 't1', reason: 'answer' })
   const band = await $.ui.mount({ plugin: 'clean-bar', surface: 'terminal', ...BAND })
-  expect(await band.find({ type: 'Text', text: /Listo en 4s · 1 archivo modificado \(app\.ts\)/ })).toBeDefined()
-  // La sección de contexto, refrescada al terminar el turno
-  expect(await band.find({ type: 'Text', text: /189k de 1M · compacta en 950k/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /Listo en 4s/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /189k\/1M/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /19%/ })).toBeDefined()
+  expect(await band.find({ type: 'Text', text: /messages/ })).toBeUndefined()
+  // El detalle del progreso trae el resumen completo
+  await band.press({ key: 'fold-progress' })
+  expect(await band.find({ type: 'Text', text: /Listo en 4s · 1 archivo modificado \(app\.ts\)/ })).toBeDefined()
+  // El del contexto (refrescado al terminar el turno) sustituye al anterior: uno a la vez
+  await band.press({ key: 'fold-context' })
+  expect(await band.find({ type: 'Text', text: /189k de 1M · compacta en 950k/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /messages/ })).toBeDefined()
   expect(await band.find({ type: 'Text', text: /mcp tools/ })).toBeUndefined()
-  // Plegada, el contexto pierde la leyenda y conserva uso y porcentaje
-  await band.press({ key: 'fold-context' })
-  expect(await band.find({ type: 'Text', text: /messages/ })).toBeUndefined()
-  expect(await band.find({ type: 'Text', text: /189k de 1M/ })).toBeDefined()
-  expect(await band.find({ type: 'Text', text: /compacta en/ })).toBeUndefined()
+  expect(await band.find({ type: 'Text', text: /1 archivo modificado/ })).toBeUndefined()
   await band.unmount()
 })

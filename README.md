@@ -31,14 +31,14 @@ Funciona en la terminal y en la pestaña Code de la app de escritorio. Requiere 
 
 ### clean-bar
 
-Clean View y Context Bar en un único mod: una caja sobre el prompt, con dos secciones.
+Clean View y Context Bar en un único mod: una sola línea sobre el prompt, con dos secciones que despliegan su detalle al pulsarlas.
 
 - Oculta las filas de llamadas a herramientas (ctrl+o sigue mostrándolas).
 - Con plan (TodoWrite, Tasks o `work_state_write` de claude-mem): el prompt como cabecera en degradado, `Paso n de m` con barra y porcentaje, y una fila por tarea con su mini barra y estado (Hecho, En curso, Siguiente, Pendiente). Muestra hasta 6 tareas alrededor de la actual y, debajo, la acción en curso (`↳ Editar app.ts`).
 - Sin plan, muestra la acción actual y el número de pasos (no hay porcentaje que calcular).
 - Al terminar, resumen breve: archivos modificados, comandos y errores.
 - Sección de contexto (como context-bar): tokens usados de la ventana, umbral de autocompactado, porcentaje, barra apilada por categoría y leyenda. Se refresca al acabar cada turno y tras `/compact`.
-- Cada sección se pliega a una sola línea con `1` (progreso) y `2` (contexto) en el prompt vacío, o con su botón `▾`/`▸`. Plegadas muestran la tarea actual con mini barra y porcentaje, y el uso de contexto con mini barra apilada y porcentaje. La elección se recuerda entre sesiones.
+- Por defecto ocupa una línea: la tarea en curso con mini barra, posición y porcentaje, y el uso de contexto con mini barra apilada y porcentaje. Pulsar una sección, o `1` (progreso) y `2` (contexto) en el prompt vacío, despliega su detalle en una caja debajo (una sección a la vez); pulsarla otra vez la recoge.
 - Se activa y desactiva con `0` (prompt vacío), el botón de la caja o `/clean-bar [on|off]`.
 
 Sustituye a clean-view y context-bar: conviene no tenerlos activos a la vez.

@@ -30,11 +30,11 @@ export type Reading = {
   compactsAt?: number
 }
 
-/** Qué secciones se muestran en una sola línea. */
-export type Compact = { progress: boolean; context: boolean }
+/** Las secciones de la línea; cada una despliega su detalle al pulsarla. */
+export type Section = 'progress' | 'context'
 
 declare module 'claude-code' {
   interface PluginState {
-    'clean-bar': { isOn: boolean; compact: Compact; run: Run | null; reading: Reading | null }
+    'clean-bar': { isOn: boolean; open: Section | null; run: Run | null; reading: Reading | null }
   }
 }

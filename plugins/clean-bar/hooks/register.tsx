@@ -1,25 +1,30 @@
 // Clean Bar: Clean View y Context Bar en una sola caja sobre el prompt.
-//   Arriba, el progreso: la tarea en curso, una barra del plan y su porcentaje (sin plan,
-//   solo la actividad). Debajo, la ventana de contexto: barra apilada por categoría y leyenda.
-//   Cada sección se pliega a una línea con `1` y `2` (prompt vacío) o su botón ▾/▸.
+//   Una sola línea: el progreso (tarea en curso, mini barra y porcentaje) y el contexto
+//   (mini barra apilada y porcentaje). Pulsar una sección, o `1` y `2` (prompt vacío),
+//   despliega su detalle debajo: el plan completo o el desglose de la ventana.
 //   Oculta las filas de herramientas. Se alterna con `0` (prompt vacío), el botón o /clean-bar.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Compact, Reading, Run, Step, StepStatus } from '../types'
+import type { Reading, Run, Section, Step, StepStatus } from '../types'
 import { GLYPH, SPLIT, cells, legend, share, toReading, tokens } from './context'
 
 const isOn = atom({ plugin: 'clean-bar', key: 'isOn' } as const, true)
 const run = atom({ plugin: 'clean-bar', key: 'run' } as const, null as Run | null)
 const reading = atom({ plugin: 'clean-bar', key: 'reading' } as const, null as Reading | null)
-const compact = atom({ plugin: 'clean-bar', key: 'compact' } as const, { progress: false, context: false } as Compact)
+const open = atom({ plugin: 'clean-bar', key: 'open' } as const, null as Section | null)
 
 const STORE_KEY = 'isOn'
-const COMPACT_KEY = 'compact'
 const TOGGLE_HOTKEY = '0'
-const FOLD_HOTKEY: Record<keyof Compact, string> = { progress: '1', context: '2' }
-/** Ancho de las barras en modo compacto. */
+const SECTION_HOTKEY: Record<Section, string> = { progress: '1', context: '2' }
+/** Ancho de las mini barras de cada tarea en el detalle. */
 const MINI_BAR = 16
+/** Ancho de las barras de la línea. */
+const LINE_BAR = 10
+const GAP = '  '
+/** Lo que ocupa un botón `plain` con atajo antes de su texto: `1: `. */
+const HOTKEY_WIDTH = 3
+const MIN_LABEL = 8
 const MIN_WIDTH = 20
 const PLAN_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'])
 /** La lista de trabajo de claude-mem (`work_state_write`), con el prefijo MCP que tenga instalado. */
@@ -206,9 +211,8 @@ async function refreshContext($: EngineInterface) {
   await update($, reading, () => toReading(b))
 }
 
-async function toggleCompact($: EngineInterface, section: keyof Compact) {
-  const value = await update($, compact, c => ({ ...c, [section]: !c[section] }))
-  await $.store.set(COMPACT_KEY, value).catch(() => {})
+async function toggleSection($: EngineInterface, section: Section) {
+  await update($, open, current => (current === section ? null : section))
 }
 
 async function trackPlan($: EngineInterface, tool: string, e: object, ran: { result?: unknown }) {
@@ -246,10 +250,6 @@ export const register: Register = on => {
     const r = await next(e)
     const stored = await $.store.get(STORE_KEY).catch(() => undefined)
     if (typeof stored === 'boolean') await update($, isOn, () => stored)
-    const folded = (await $.store.get(COMPACT_KEY).catch(() => undefined)) as Partial<Compact> | undefined
-    if (folded && typeof folded === 'object') {
-      await update($, compact, () => ({ progress: folded.progress === true, context: folded.context === true }))
-    }
     await $.command
       .register({ name: 'clean-bar', description: 'Activa o desactiva Clean Bar (on | off | sin argumento para alternar)', immediate: true })
       .catch(() => {})
@@ -332,14 +332,16 @@ export const register: Register = on => {
     return <Box />
   })
 
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const rest = await next(e) // lo que dibujan otros mods y Claude Code se queda debajo
     if (e.props.hasSurvey || e.props.view.agentId !== undefined) return rest
     const { Box, Text, Button } = $.ui.resolve(e)
     const active = await read($, isOn)
 
+    const toggleLabel = active ? 'ocultar' : 'Activar Clean Bar'
     const toggle = (
-      <Button key="toggle" hotkey={TOGGLE_HOTKEY} plain label={active ? 'ocultar' : 'Activar Clean Bar'} onPress={() => setOn($, !active)} />
+      <Button key="toggle" hotkey={TOGGLE_HOTKEY} plain label={toggleLabel} onPress={() => setOn($, !active)} />
     )
     if (!active) {
       return (
@@ -353,124 +355,114 @@ export const register: Register = on => {
       )
     }
 
-    const inner = e.props.bodyColumns - 4 // el borde y el relleno ocupan 4 celdas
-    if (inner < MIN_WIDTH) return rest
+    const width = e.props.bodyColumns
+    if (width < MIN_WIDTH) return rest
     const r = await read($, run)
     const ctx = await read($, reading)
     const now = await $.clock.now()
-    const folded = await read($, compact)
+    const opened = await read($, open)
+    const inner = width - 4 // el borde y el relleno del detalle ocupan 4 celdas
 
-    const fold = (section: keyof Compact) => (
-      <Button
-        key={`fold-${section}`}
-        hotkey={FOLD_HOTKEY[section]}
-        plain
-        label={folded[section] ? '▸' : '▾'}
-        onPress={() => toggleCompact($, section)}
-      />
-    )
-
-    // Una fila de sección: rombo, nombre y botones, lo que quepa a la izquierda; a la derecha el dato.
-    const row = (title: string, buttons: RenderChildren, left: RenderChildren, right: RenderChildren) => (
-      <Box flexDirection="row" justifyContent="space-between">
-        <Box flexDirection="row" flexShrink={1}>
-          <Text color={ACCENT}>{'◆ '}</Text>
-          <Text bold>{`${title} `}</Text>
-          {buttons}
-          <Text wrap="truncate-end">{left}</Text>
-        </Box>
-        <Text wrap="truncate-start">{right}</Text>
-      </Box>
-    )
     const badge = (percent: number, tone: string) => (
       <Text bold color="black" backgroundColor={tone}>{` ${percent}% `}</Text>
     )
+    const blocks = (count: number, size: number, a: string, b: string) => (
+      <Text>
+        {Array.from({ length: size }, (_, i) => (
+          <Text color={i < count ? mix(a, b, count > 1 ? i / (count - 1) : 1) : SHADE}>█</Text>
+        ))}
+      </Text>
+    )
+    const stacked = (c: Reading, size: number) => (
+      <Text>
+        {cells(c, size).map(cell => (
+          <Text color={cell.color}>{cell.text}</Text>
+        ))}
+      </Text>
+    )
+    // Cada sección de la línea es un botón que despliega o recoge su detalle.
+    const section = (s: Section, children: RenderChildren) => (
+      <Button key={`fold-${s}`} hotkey={SECTION_HOTKEY[s]} plain onPress={() => toggleSection($, s)}>
+        <Text color={ACCENT}>{opened === s ? '▾ ' : '▸ '}</Text>
+        {children}
+      </Button>
+    )
 
-    const progressSection = () => {
-      const buttons = (
-        <Box flexDirection="row">
-          {fold('progress')}
-          <Text> </Text>
-          {toggle}
-          <Text> </Text>
-        </Box>
+    // Estado del turno, compartido por la línea y el detalle.
+    const hasPlan = (r?.plan.length ?? 0) > 0
+    const { done, total, percent } = progress(r?.plan ?? [])
+    const current = currentTask(r?.plan ?? [])
+    const elapsed = r ? formatDuration(r.isWorking ? now - r.startedAt : r.durationMs) : ''
+    const isClean = r ? r.errors === 0 && !r.isAborted : true
+    const tone = r?.isWorking ? ACCENT : isClean ? OK : WARN
+    const position = current && r?.isWorking ? current.index + 1 : done
+    const steps = r ? `${r.toolCalls} ${r.toolCalls === 1 ? 'paso' : 'pasos'}` : ''
+    const [from, to] = r?.isWorking ? [ORANGE, PINK] : isClean ? [GREEN_FROM, GREEN_TO] : [ORANGE, WARN]
+    const summary = r ? `${isClean ? '✓' : '!'} ${summarize(r)}` : ''
+
+    // La línea: lo que no es la etiqueta de progreso tiene ancho fijo; la etiqueta se recorta al resto.
+    const used = ctx ? `${tokens(ctx.total)}/${tokens(ctx.window)}` : ''
+    const level = ctx ? ctx.total / (ctx.compactsAt ?? ctx.window) : 0
+    const ctxTone = level >= 0.9 ? 'red' : level >= 0.7 ? 'yellow' : 'green'
+    const progressRight = hasPlan ? `${'█'.repeat(LINE_BAR)} ${position}/${total}  ${percent}% ` : ` ${steps} · ${elapsed}`
+    const contextWidth = ctx ? GAP.length + HOTKEY_WIDTH + 2 + LINE_BAR + ` ${used}  ${ctx.percent}% `.length : 0
+    const toggleWidth = GAP.length + HOTKEY_WIDTH + toggleLabel.length
+    const labelWidth = Math.max(width - HOTKEY_WIDTH - 2 - progressRight.length - contextWidth - toggleWidth, MIN_LABEL)
+
+    const progressLine = () => {
+      if (!r) return <Text dimColor>esperando una tarea</Text>
+      const doing = r.isWorking ? (current?.step ?? r.activity) : undefined
+      const left = !r.isWorking ? (
+        <Text color={tone}>{clip(summary, labelWidth)}</Text>
+      ) : doing ? (
+        <Text>
+          <Text color={COLOR[doing.status]}>{`${ICON[doing.status]} `}</Text>
+          <Text>{clip(doing.label, labelWidth - 2)}</Text>
+        </Text>
+      ) : (
+        <Text dimColor>Pensando…</Text>
       )
-      if (!r) return row('clean view', buttons, null, <Text dimColor>esperando una tarea</Text>)
-      const hasPlan = r.plan.length > 0
-      const { done, total, percent } = progress(r.plan)
-      const current = currentTask(r.plan)
-      const elapsed = formatDuration(r.isWorking ? now - r.startedAt : r.durationMs)
-      const isClean = r.errors === 0 && !r.isAborted
-      const tone = r.isWorking ? ACCENT : isClean ? OK : WARN
-      const position = current && r.isWorking ? current.index + 1 : done
-      const steps = `${r.toolCalls} ${r.toolCalls === 1 ? 'paso' : 'pasos'}`
-
-      if (folded.progress) {
-        // Una línea: lo que se hace ahora (o el resumen) y, a la derecha, mini barra y porcentaje.
-        const doing = r.isWorking ? (current?.step ?? r.activity) : undefined
-        const left = r.isWorking ? (
-          doing ? (
-            <Text>
-              <Text color={COLOR[doing.status]}>{`${ICON[doing.status]} `}</Text>
-              <Text>{doing.label}</Text>
-            </Text>
-          ) : (
-            <Text dimColor>Pensando…</Text>
-          )
-        ) : (
-          <Text color={tone}>{`${isClean ? '✓' : '!'} ${summarize(r)}`}</Text>
-        )
-        const mini = bar(percent, MINI_BAR)
-        const right = hasPlan ? (
-          <Text>
-            <Text color={tone}>{mini.filled}</Text>
-            <Text color={TRACK}>{mini.empty}</Text>
-            <Text dimColor>{` ${position}/${total} `}</Text>
-            {badge(percent, tone)}
-          </Text>
-        ) : (
-          <Text dimColor>{` ${steps} · ${elapsed}`}</Text>
-        )
-        return row('clean view', buttons, left, right)
-      }
-
-      const summary = (
-        <Text color={tone} wrap="wrap">
-          {`${isClean ? '✓' : '!'} ${summarize(r)}`}
+      if (!hasPlan) return <Text>{left}<Text dimColor>{` ${steps} · ${elapsed}`}</Text></Text>
+      const mini = bar(percent, LINE_BAR)
+      return (
+        <Text>
+          {left}
+          <Text> </Text>
+          <Text color={tone}>{mini.filled}</Text>
+          <Text color={TRACK}>{mini.empty}</Text>
+          <Text dimColor>{` ${position}/${total} `}</Text>
+          {badge(percent, tone)}
         </Text>
       )
+    }
 
+    const contextLine = (c: Reading) => (
+      <Text>
+        {stacked(c, LINE_BAR)}
+        <Text dimColor>{` ${used} `}</Text>
+        {badge(c.percent, ctxTone)}
+      </Text>
+    )
+
+    const progressDetail = () => {
+      if (!r) return <Text dimColor>esperando una tarea</Text>
+      const doneText = !r.isWorking && <Text color={tone} wrap="wrap">{summary}</Text>
       if (!hasPlan) {
         return (
           <Box flexDirection="column">
-            {row('clean view', buttons, null, <Text dimColor>{`${steps} · ${elapsed}`}</Text>)}
-            {r.isWorking && r.activity && (
-              <Text wrap="truncate-end">
-                <Text color={COLOR[r.activity.status]}>{`${ICON[r.activity.status]} `}</Text>
-                <Text>{r.activity.label}</Text>
-              </Text>
-            )}
-            {r.isWorking && !r.activity && <Text dimColor>Pensando…</Text>}
-            {!r.isWorking && summary}
+            <Text dimColor>{`${clip(r.title, inner) || 'clean view'} · ${steps} · ${elapsed}`}</Text>
+            {r.isWorking && r.activity && <Text dimColor wrap="truncate-end">{`↳ ${r.activity.label}`}</Text>}
+            {doneText}
           </Box>
         )
       }
-
-      // Con plan: cabecera con el prompt, barra del plan y una fila por tarea con su mini barra.
-      const [from, to] = r.isWorking ? [ORANGE, PINK] : isClean ? [GREEN_FROM, GREEN_TO] : [ORANGE, WARN]
-      const blocks = (count: number, width: number, a: string, b: string) => (
-        <Text>
-          {Array.from({ length: width }, (_, i) => (
-            <Text color={i < count ? mix(a, b, count > 1 ? i / (count - 1) : 1) : SHADE}>█</Text>
-          ))}
-        </Text>
-      )
+      // Cabecera con el prompt, barra del plan y una fila por tarea con su mini barra.
       const title = clip(r.title, Math.max(inner - 24, MIN_WIDTH)) || 'clean view'
       const stepText = `Paso ${position} de ${total} `
       const pct = ` ${percent}%`
-      const width = Math.max(inner - stepText.length - pct.length, 0)
+      const barWidth = Math.max(inner - stepText.length - pct.length, 0)
       const { start, end } = visibleRange(total, current?.index ?? total - 1, MAX_ROWS)
-      const labelWidth = Math.min(Math.max(...r.plan.map(s => s.label.length)) + 2, Math.floor(inner * 0.45))
+      const rowLabel = Math.min(Math.max(...r.plan.map(s => s.label.length)) + 2, Math.floor(inner * 0.45))
       const hidden = total - (end - start)
       return (
         <Box flexDirection="column">
@@ -478,18 +470,16 @@ export const register: Register = on => {
             <Box flexDirection="row" flexShrink={1}>
               <Text color={to}>{'✱ '}</Text>
               <Text bold wrap="truncate-end">
-                {[...title].map((c, i, all) => (
-                  <Text color={mix(from, to, all.length > 1 ? i / (all.length - 1) : 0)}>{c}</Text>
+                {[...title].map((ch, i, all) => (
+                  <Text color={mix(from, to, all.length > 1 ? i / (all.length - 1) : 0)}>{ch}</Text>
                 ))}
               </Text>
-              <Text> </Text>
-              {buttons}
             </Box>
             <Text dimColor>{elapsed}</Text>
           </Box>
           <Text wrap="truncate-end">
             <Text dimColor>{stepText}</Text>
-            {blocks(Math.round((percent / 100) * width), width, from, to)}
+            {blocks(Math.round((percent / 100) * barWidth), barWidth, from, to)}
             <Text bold color={to}>{pct}</Text>
           </Text>
           {r.plan.slice(start, end).map((s, k) => {
@@ -500,7 +490,7 @@ export const register: Register = on => {
             return (
               <Text wrap="truncate-end">
                 <Text color={isRunning ? PINK : COLOR[s.status]}>{`${isRunning ? '●' : ICON[s.status]} `}</Text>
-                <Text bold={isRunning} dimColor={isPending}>{clip(s.label, labelWidth - 2).padEnd(labelWidth)}</Text>
+                <Text bold={isRunning} dimColor={isPending}>{clip(s.label, rowLabel - 2).padEnd(rowLabel)}</Text>
                 {blocks(fill, MINI_BAR, a, b)}
                 <Text bold={isRunning} color={isRunning ? PINK : undefined} dimColor={isPending}>
                   {` ${stepState(r.plan, start + k)}`}
@@ -510,73 +500,51 @@ export const register: Register = on => {
           })}
           {hidden > 0 && <Text dimColor>{`  … y ${hidden} ${hidden === 1 ? 'tarea' : 'tareas'} más`}</Text>}
           {r.isWorking && r.activity && <Text dimColor wrap="truncate-end">{`  ↳ ${r.activity.label}`}</Text>}
-          {!r.isWorking && summary}
+          {doneText}
         </Box>
       )
     }
 
-    const contextSection = (c: Reading) => {
-      const used = `${tokens(c.total)} de ${tokens(c.window)}`
-      const level = c.compactsAt ? c.total / c.compactsAt : c.total / c.window
-      const tone = level >= 0.9 ? 'red' : level >= 0.7 ? 'yellow' : 'green'
-      const buttons = (
-        <Box flexDirection="row">
-          {fold('context')}
-          <Text> </Text>
-        </Box>
-      )
-      const stacked = (width: number) => (
-        <Text>
-          {cells(c, width).map(cell => (
-            <Text color={cell.color}>{cell.text}</Text>
-          ))}
-        </Text>
-      )
-
-      if (folded.context) {
-        return row('context', buttons, null, (
-          <Text>
-            {stacked(MINI_BAR)}
-            <Text dimColor>{` ${used} `}</Text>
-            {badge(c.percent, tone)}
+    const contextDetail = (c: Reading) => (
+      <Box flexDirection="column">
+        <Text dimColor>{`${tokens(c.total)} de ${tokens(c.window)}${c.compactsAt ? ` · compacta en ${tokens(c.compactsAt)}` : ''}`}</Text>
+        {stacked(c, inner)}
+        {legend(c, inner).map(line => (
+          <Text wrap="truncate-end">
+            {line.map((sl, i) => (
+              <Text>
+                {i > 0 && <Text>{SPLIT}</Text>}
+                <Text color={sl.color}>{sl.kind === 'used' ? '■ ' : `${GLYPH[sl.kind]} `}</Text>
+                <Text dimColor={sl.kind !== 'used'}>{`${sl.name} `}</Text>
+                <Text bold={sl.kind === 'used'}>{tokens(sl.tokens)}</Text>
+                {sl.kind === 'used' && <Text dimColor>{` ${share(sl.tokens, c.window)}`}</Text>}
+              </Text>
+            ))}
           </Text>
-        ))
-      }
+        ))}
+      </Box>
+    )
 
-      const info = `${used}${c.compactsAt ? ` · compacta en ${tokens(c.compactsAt)}` : ''}`
-      return (
-        <Box flexDirection="column">
-          {row('context', buttons, null, (
-            <Text>
-              <Text dimColor>{`${info} `}</Text>
-              {badge(c.percent, tone)}
-            </Text>
-          ))}
-          {stacked(inner)}
-          {legend(c, inner).map(line => (
-            <Text wrap="truncate-end">
-              {line.map((sl, i) => (
-                <Text>
-                  {i > 0 && <Text>{SPLIT}</Text>}
-                  <Text color={sl.color}>{sl.kind === 'used' ? '■ ' : `${GLYPH[sl.kind]} `}</Text>
-                  <Text dimColor={sl.kind !== 'used'}>{`${sl.name} `}</Text>
-                  <Text bold={sl.kind === 'used'}>{tokens(sl.tokens)}</Text>
-                  {sl.kind === 'used' && <Text dimColor>{` ${share(sl.tokens, c.window)}`}</Text>}
-                </Text>
-              ))}
-            </Text>
-          ))}
-        </Box>
-      )
-    }
-
-    // Separación entre secciones solo cuando la de arriba ocupa varias líneas.
+    const detail = opened === 'progress' ? progressDetail() : opened === 'context' && ctx ? contextDetail(ctx) : null
+    const isPlanRunning = r?.isWorking === true && hasPlan
     return (
       <Box flexDirection="column">
-        <Box flexDirection="column" borderStyle="round" borderColor={r?.isWorking && r.plan.length > 0 ? PINK : 'inactive'} paddingX={1}>
-          {progressSection()}
-          {ctx && <Box marginTop={folded.progress ? 0 : 1}>{contextSection(ctx)}</Box>}
+        <Box flexDirection="row" justifyContent="space-between">
+          <Box flexDirection="row" flexShrink={1}>
+            {section('progress', progressLine())}
+          </Box>
+          <Box flexDirection="row">
+            {ctx && <Text>{GAP}</Text>}
+            {ctx && section('context', contextLine(ctx))}
+            <Text>{GAP}</Text>
+            {toggle}
+          </Box>
         </Box>
+        {detail && (
+          <Box flexDirection="column" borderStyle="round" borderColor={isPlanRunning ? PINK : 'inactive'} paddingX={1}>
+            {detail}
+          </Box>
+        )}
         {rest}
       </Box>
     )
